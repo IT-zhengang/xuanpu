@@ -4,6 +4,8 @@ import {
   ListPlus,
   Loader2,
   AlertCircle,
+  Bot,
+  Cpu,
   RefreshCw,
   Square,
   X,
@@ -14,6 +16,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
+import { AgentSdkSelector } from './AgentSdkSelector'
 import { ModelSelector } from './ModelSelector'
 import {
   VirtualizedMessageList,
@@ -677,6 +680,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
   const [retryTickMs, setRetryTickMs] = useState<number>(Date.now())
   const [executionStartedAt, setExecutionStartedAt] = useState<number | null>(null)
   const [executionTickMs, setExecutionTickMs] = useState<number>(Date.now())
+  const syncedRuntimeSessionIdRef = useRef<string | null>(null)
 
   // Prompt history key: works for both worktree and connection sessions
   const historyKey = worktreeId ?? connectionId
@@ -715,9 +719,16 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
     return null
   })
   const sessionAgentSdk = sessionRecord?.agent_sdk ?? 'opencode'
+  const defaultAgentSdk = useSettingsStore((state) => state.defaultAgentSdk ?? 'opencode')
+  const projectRecord = useProjectStore((state) =>
+    sessionRecord?.project_id ? state.projects.find((project) => project.id === sessionRecord.project_id) : null
+  )
+  const projectAgentSdk = projectRecord?.agent_sdk ?? defaultAgentSdk
   const supportsUsageAnalytics =
     sessionAgentSdk === 'claude-code' || sessionAgentSdk === 'codex'
-  const globalModel = useSettingsStore((state) => resolveModelForSdk(sessionAgentSdk, state))
+  const globalModel = useSettingsStore((state) =>
+    resolveModelForSdk(sessionAgentSdk === 'terminal' ? 'opencode' : sessionAgentSdk, state)
+  )
   const effectiveModel: SelectedModel | null =
     sessionRecord?.model_provider_id && sessionRecord.model_id
       ? {
@@ -728,6 +739,18 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
       : globalModel
   const currentModelId = effectiveModel?.modelID ?? 'claude-opus-4-5-20251101'
   const currentProviderId = effectiveModel?.providerID ?? 'anthropic'
+  const sessionUsesProjectRuntime =
+    !projectRecord || projectRecord.agent_sdk === null
+      ? sessionAgentSdk === defaultAgentSdk
+      : sessionAgentSdk === projectAgentSdk
+  const projectModelId =
+    projectRecord?.model_id && projectRecord?.model_provider_id ? projectRecord.model_id : null
+  const sessionUsesProjectModel =
+    projectModelId === null
+      ? !sessionRecord?.model_id
+      : sessionRecord?.model_id === projectModelId &&
+        sessionRecord?.model_provider_id === projectRecord?.model_provider_id &&
+        (sessionRecord?.model_variant ?? null) === (projectRecord?.model_variant ?? null)
   // Claude Code and Codex SDKs skip PLAN_MODE_PREFIX (they don't use the text-prefix approach)
   const isClaudeCode = sessionRecord?.agent_sdk === 'claude-code'
   const skipPlanModePrefix = isClaudeCode || sessionRecord?.agent_sdk === 'codex'
@@ -737,6 +760,15 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
   const activePermission = usePermissionStore((s) => s.getActivePermission(sessionId))
   const activeCommandApproval = useCommandApprovalStore((s) => s.getActiveApproval(sessionId))
   const currentSessionStatus = useWorktreeStatusStore((s) => s.sessionStatuses[sessionId] ?? null)
+
+  useEffect(() => {
+    const persistedRuntimeSessionId = sessionRecord?.opencode_session_id ?? null
+    if (syncedRuntimeSessionIdRef.current === persistedRuntimeSessionId) return
+
+    syncedRuntimeSessionIdRef.current = persistedRuntimeSessionId
+    setOpencodeSessionId(persistedRuntimeSessionId)
+    transcriptSourceRef.current.opencodeSessionId = persistedRuntimeSessionId
+  }, [sessionRecord?.opencode_session_id])
 
   // Pending plan approval (ExitPlanMode blocking tool)
   const pendingPlan = useSessionStore((s) => s.pendingPlans.get(sessionId) ?? null)
@@ -1107,6 +1139,40 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
     // (streaming appends messages continuously and should use smooth scroll instead)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewState.status, sessionId])
+
+  const ensureActiveAgentSession = useCallback(async (): Promise<string | null> => {
+    const activeWorktreePath = transcriptSourceRef.current.worktreePath ?? worktreePath
+    const currentRuntimeSessionId = transcriptSourceRef.current.opencodeSessionId ?? opencodeSessionId
+
+    if (!activeWorktreePath || !window.agentOps) {
+      return null
+    }
+
+    if (currentRuntimeSessionId) {
+      return currentRuntimeSessionId
+    }
+
+    const connectResult = await window.agentOps.connect(activeWorktreePath, sessionId)
+    if (!connectResult.success || !connectResult.sessionId) {
+      console.error('Failed to establish agent session:', connectResult.error)
+      return null
+    }
+
+    setOpencodeSessionId(connectResult.sessionId)
+    syncedRuntimeSessionIdRef.current = connectResult.sessionId
+    transcriptSourceRef.current.opencodeSessionId = connectResult.sessionId
+    useSessionStore.getState().setOpenCodeSessionId(sessionId, connectResult.sessionId)
+
+    try {
+      await window.db.session.update(sessionId, {
+        opencode_session_id: connectResult.sessionId
+      })
+    } catch (error) {
+      console.warn('Failed to persist connected runtime session ID:', error)
+    }
+
+    return connectResult.sessionId
+  }, [opencodeSessionId, sessionId, worktreePath])
 
   // Reset prompt history navigation on session change
   useEffect(() => {
@@ -2616,28 +2682,35 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
                 lastSendMode.set(sessionId, 'build')
                 useWorktreeStatusStore.getState().setSessionStatus(sessionId, 'working')
                 lastSentPromptRef.current = followUp
-                const wtPath = transcriptSourceRef.current.worktreePath
-                const opcSid = transcriptSourceRef.current.opencodeSessionId
-                if (!wtPath || !opcSid) {
-                  useSessionStore.getState().requeueFollowUpMessageFront(sessionId, followUp)
-                  useWorktreeStatusStore.getState().clearSessionStatus(sessionId)
-                  setIsSending(false)
-                  return
-                }
-                window.agentOps
-                  .prompt(wtPath, opcSid, [{ type: 'text', text: followUp }], getModelForRequests())
-                  .then((result) => {
+                void (async () => {
+                  const wtPath = transcriptSourceRef.current.worktreePath
+                  const opcSid =
+                    transcriptSourceRef.current.opencodeSessionId ??
+                    (await ensureActiveAgentSession())
+                  if (!wtPath || !opcSid) {
+                    useSessionStore.getState().requeueFollowUpMessageFront(sessionId, followUp)
+                    useWorktreeStatusStore.getState().clearSessionStatus(sessionId)
+                    setIsSending(false)
+                    return
+                  }
+                  try {
+                    const result = await window.agentOps.prompt(
+                      wtPath,
+                      opcSid,
+                      [{ type: 'text', text: followUp }],
+                      getModelForRequests()
+                    )
                     if (!result.success) {
                       console.error('Failed to send follow-up message:', result.error)
                       toast.error(t('sessionView.toasts.followUpPromptError'))
                       setIsSending(false)
                     }
-                  })
-                  .catch((err) => {
+                  } catch (err) {
                     console.error('Failed to send follow-up message:', err)
                     toast.error(t('sessionView.toasts.followUpPromptError'))
                     setIsSending(false)
-                  })
+                  }
+                })()
                 return
               }
 
@@ -3519,7 +3592,8 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           spaceIndex > 0 ? trimmedValue.slice(1, spaceIndex).toLowerCase() : trimmedValue.slice(1)
 
         if (commandName === 'undo' || commandName === 'redo') {
-          if (!worktreePath || !opencodeSessionId) {
+          const activeAgentSessionId = await ensureActiveAgentSession()
+          if (!worktreePath || !activeAgentSessionId) {
             toast.error(t('sessionView.toasts.notConnected'))
             return
           }
@@ -3534,7 +3608,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
 
           try {
             if (commandName === 'undo') {
-              const result = await window.agentOps.undo(worktreePath, opencodeSessionId)
+              const result = await window.agentOps.undo(worktreePath, activeAgentSessionId)
               if (!result.success) {
                 toast.error(result.error || t('sessionView.toasts.nothingToUndo'))
                 return
@@ -3554,7 +3628,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
                 toast.error(t('sessionView.toasts.redoUnsupported'))
                 return
               }
-              const result = await window.agentOps.redo(worktreePath, opencodeSessionId)
+              const result = await window.agentOps.redo(worktreePath, activeAgentSessionId)
               if (!result.success) {
                 toast.error(result.error || t('sessionView.toasts.nothingToRedo'))
                 return
@@ -3617,7 +3691,8 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             return
           }
 
-          if (!worktreePath || !opencodeSessionId) {
+          const activeAgentSessionId = await ensureActiveAgentSession()
+          if (!worktreePath || !activeAgentSessionId) {
             toast.error(t('sessionView.toasts.notConnected'))
             return
           }
@@ -3691,7 +3766,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           try {
             const result = await window.agentOps.prompt(
               worktreePath,
-              opencodeSessionId,
+              activeAgentSessionId,
               parts,
               selectedModel,
               codexPromptOptions
@@ -3825,8 +3900,9 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           }
         }
 
-        // Send to OpenCode if connected
-        if (worktreePath && opencodeSessionId) {
+        // Send to the active agent session, reconnecting lazily after runtime/model switches.
+        const activeAgentSessionId = await ensureActiveAgentSession()
+        if (worktreePath && activeAgentSessionId) {
           const requestModel = getModelForRequests()
 
           // Track which model is being used on this worktree
@@ -3866,7 +3942,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
               usePRReviewStore.getState().clearAttachments()
               const result = await window.agentOps.command(
                 worktreePath,
-                opencodeSessionId,
+                activeAgentSessionId,
                 commandName,
                 commandArgs,
                 requestModel
@@ -3900,7 +3976,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
               usePRReviewStore.getState().clearAttachments()
               const result = await window.agentOps.prompt(
                 worktreePath,
-                opencodeSessionId,
+                activeAgentSessionId,
                 parts,
                 requestModel,
                 codexPromptOptions
@@ -3937,7 +4013,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             usePRReviewStore.getState().clearAttachments()
             const result = await window.agentOps.prompt(
               worktreePath,
-              opencodeSessionId,
+              activeAgentSessionId,
               parts,
               requestModel,
               codexPromptOptions
@@ -3973,7 +4049,6 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
       worktreePath,
       worktreeId,
       connectionId,
-      opencodeSessionId,
       attachments,
       allSlashCommands,
       sessionCapabilities,
@@ -3981,6 +4056,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
       skipPlanModePrefix,
       codexPromptOptions,
       refreshMessagesFromOpenCode,
+      ensureActiveAgentSession,
       getModelForRequests,
       fileMentions,
       resetAutoScrollState,
@@ -5229,62 +5305,135 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
                   data-testid="message-input"
                 />
 
-                {/* Bottom row: model selector + context indicator + hint text + send/implement buttons */}
-                <div className="flex items-center justify-between px-4 pb-3 pt-3">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <ModelSelector sessionId={sessionId} showProviderPrefix={false} />
-                    {sessionAgentSdk === 'codex' && (
-                      <CodexFastToggle
-                        enabled={codexFastMode}
-                        accepted={codexFastModeAccepted}
-                        onToggle={() => updateSetting('codexFastMode', !codexFastMode)}
-                        onAccept={() => updateSetting('codexFastModeAccepted', true)}
-                      />
-                    )}
-                    <AttachmentButton onAttach={handleAttach} />
-                    <ContextIndicator
-                      sessionId={sessionId}
-                      modelId={currentModelId}
-                      providerId={currentProviderId}
-                    />
-                    <SessionCostPill
-                      summary={sessionUsageSummary}
-                      fallbackCost={sessionCostSnapshot}
-                      fallbackTokens={
-                        sessionTokenSnapshot
-                          ? {
-                              input: sessionTokenSnapshot.input,
-                              output: sessionTokenSnapshot.output,
-                              cacheRead: sessionTokenSnapshot.cacheRead,
-                              cacheWrite: sessionTokenSnapshot.cacheWrite
-                            }
-                          : null
-                      }
-                    />
-                    {pendingPlan ? (
-                      <span className="text-[12px] text-muted-foreground">
-                        {t('sessionView.composer.planFeedbackHint')}
-                      </span>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
+                {/* Bottom rows: primary controls first, unified metadata chips second */}
+                <div className="flex items-end justify-between gap-3 px-4 pb-3 pt-3">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                      <AgentSdkSelector sessionId={sessionId} />
+                      {sessionAgentSdk !== 'terminal' && (
+                        <ModelSelector sessionId={sessionId} showProviderPrefix={false} />
+                      )}
+                      {sessionAgentSdk === 'codex' && (
+                        <CodexFastToggle
+                          enabled={codexFastMode}
+                          accepted={codexFastModeAccepted}
+                          onToggle={() => updateSetting('codexFastMode', !codexFastMode)}
+                          onAccept={() => updateSetting('codexFastModeAccepted', true)}
+                        />
+                      )}
+                      <AttachmentButton onAttach={handleAttach} />
+                      {!pendingPlan && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            'h-7 rounded-full border px-2.5 text-[12px] font-medium transition-[color,background-color,border-color,box-shadow]',
+                            mode === 'plan'
+                              ? 'border-violet-300/80 bg-violet-500/10 text-violet-700 shadow-[0_0_0_1px_rgba(196,181,253,0.26),0_0_14px_rgba(167,139,250,0.18)] hover:bg-violet-500/14 hover:text-violet-800 dark:border-violet-400/45 dark:bg-violet-500/12 dark:text-violet-200 dark:shadow-[0_0_0_1px_rgba(167,139,250,0.22),0_0_16px_rgba(139,92,246,0.18)]'
+                              : 'border-border/70 bg-background/65 text-muted-foreground shadow-none hover:border-border hover:bg-background/85 hover:text-foreground'
+                          )}
+                          onClick={() => void toggleSessionMode(sessionId)}
+                          title={`${t('keyboardShortcuts.items.sessionModeToggle')} (Tab)`}
+                          data-testid="composer-mode-toggle"
+                        >
+                          {t('sessionView.composer.planModeLabel')}
+                        </Button>
+                      )}
+                    </div>
+
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span
                         className={cn(
-                          'h-7 rounded-full border px-2.5 text-[12px] font-medium transition-[color,background-color,border-color,box-shadow]',
-                          mode === 'plan'
-                            ? 'border-violet-300/80 bg-violet-500/10 text-violet-700 shadow-[0_0_0_1px_rgba(196,181,253,0.26),0_0_14px_rgba(167,139,250,0.18)] hover:bg-violet-500/14 hover:text-violet-800 dark:border-violet-400/45 dark:bg-violet-500/12 dark:text-violet-200 dark:shadow-[0_0_0_1px_rgba(167,139,250,0.22),0_0_16px_rgba(139,92,246,0.18)]'
-                            : 'border-border/70 bg-background/65 text-muted-foreground shadow-none hover:border-border hover:bg-background/85 hover:text-foreground'
+                          'inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-1',
+                          'border-border/60 bg-muted/40 text-muted-foreground'
                         )}
-                        onClick={() => void toggleSessionMode(sessionId)}
-                        title={`${t('keyboardShortcuts.items.sessionModeToggle')} (Tab)`}
-                        data-testid="composer-mode-toggle"
                       >
-                        {t('sessionView.composer.planModeLabel')}
-                      </Button>
-                    )}
+                        <Bot className="mr-1.5 h-3.5 w-3.5 shrink-0 text-foreground/70" />
+                        <span className="truncate">
+                          {t(
+                            sessionUsesProjectRuntime
+                              ? 'sessionView.composer.runtimeInherited'
+                              : 'sessionView.composer.runtimeOverride',
+                            {
+                              provider: t(
+                                `common.aiProviders.${sessionAgentSdk === 'claude-code' ? 'claudeCode' : sessionAgentSdk}`
+                              )
+                            }
+                          )}
+                        </span>
+                      </span>
+
+                      {sessionAgentSdk !== 'terminal' && (
+                        <span
+                          className={cn(
+                            'inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-1',
+                            'border-border/60 bg-muted/40 text-muted-foreground'
+                          )}
+                        >
+                          <Cpu className="mr-1.5 h-3.5 w-3.5 shrink-0 text-foreground/70" />
+                          <span className="truncate">
+                            {t(
+                              sessionUsesProjectModel
+                                ? 'sessionView.composer.modelInherited'
+                                : 'sessionView.composer.modelOverride',
+                              {
+                                model: effectiveModel?.modelID ?? t('sessionView.composer.noModel')
+                              }
+                            )}
+                          </span>
+                        </span>
+                      )}
+
+                      {sessionAgentSdk === 'terminal' && !pendingPlan && (
+                        <span
+                          className={cn(
+                            'inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-1',
+                            'border-dashed border-border/60 bg-background/50 text-muted-foreground'
+                          )}
+                        >
+                          <span className="truncate">{t('sessionView.composer.terminalHint')}</span>
+                        </span>
+                      )}
+
+                      {pendingPlan && (
+                        <span
+                          className={cn(
+                            'inline-flex min-w-0 max-w-full items-center rounded-full border px-2.5 py-1',
+                            'border-violet-200/80 bg-violet-500/8 text-violet-700 dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-200'
+                          )}
+                        >
+                          <span className="truncate">{t('sessionView.composer.planFeedbackHint')}</span>
+                        </span>
+                      )}
+
+                      {sessionAgentSdk !== 'terminal' && (
+                        <ContextIndicator
+                          sessionId={sessionId}
+                          modelId={currentModelId}
+                          providerId={currentProviderId}
+                          variant="compact"
+                        />
+                      )}
+
+                      <SessionCostPill
+                        summary={sessionUsageSummary}
+                        fallbackCost={sessionCostSnapshot}
+                        fallbackTokens={
+                          sessionTokenSnapshot
+                            ? {
+                                input: sessionTokenSnapshot.input,
+                                output: sessionTokenSnapshot.output,
+                                cacheRead: sessionTokenSnapshot.cacheRead,
+                                cacheWrite: sessionTokenSnapshot.cacheWrite
+                              }
+                            : null
+                        }
+                        variant="compact"
+                      />
+                    </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
+                  <div className="flex shrink-0 items-center self-end gap-1.5">
                     {isStreaming && !inputValue.trim() ? (
                       <Button
                         onClick={handleAbort}

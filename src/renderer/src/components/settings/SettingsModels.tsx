@@ -31,7 +31,7 @@ export function SettingsModels(): React.JSX.Element {
             <strong>{t('settings.models.priority.title')}</strong>
           </p>
           <ol className="list-decimal list-inside space-y-0.5 ml-2">
-            <li>{t('settings.models.priority.worktree')}</li>
+            <li>{t('settings.models.priority.project')}</li>
             {supportsModes && <li>{t('settings.models.priority.mode')}</li>}
             <li>{t('settings.models.priority.global')}</li>
             <li>{t('settings.models.priority.fallback')}</li>

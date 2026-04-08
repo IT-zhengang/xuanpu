@@ -36,6 +36,10 @@ interface Project {
   description: string | null
   tags: string | null
   language: string | null
+  agent_sdk: 'opencode' | 'claude-code' | 'codex' | 'terminal' | null
+  model_provider_id: string | null
+  model_id: string | null
+  model_variant: string | null
   custom_icon: string | null
   setup_script: string | null
   run_script: string | null
@@ -235,10 +239,14 @@ declare global {
           id: string,
           data: {
             name?: string
-            description?: string | null
-            tags?: string[] | null
-            language?: string | null
-            custom_icon?: string | null
+        description?: string | null
+        tags?: string[] | null
+        language?: string | null
+        agent_sdk?: 'opencode' | 'claude-code' | 'codex' | 'terminal' | null
+        model_provider_id?: string | null
+        model_id?: string | null
+        model_variant?: string | null
+        custom_icon?: string | null
             setup_script?: string | null
             run_script?: string | null
             archive_script?: string | null

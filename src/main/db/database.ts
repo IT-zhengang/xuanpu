@@ -138,6 +138,7 @@ export class DatabaseService {
     // skew between worktree builds.
     this.ensureConnectionTables()
     this.ensureUsageAnalyticsTables()
+    this.ensureProjectModelColumns()
   }
 
   /**
@@ -279,6 +280,13 @@ export class DatabaseService {
     `)
   }
 
+  private ensureProjectModelColumns(): void {
+    this.safeAddColumn('projects', 'agent_sdk', 'TEXT DEFAULT NULL')
+    this.safeAddColumn('projects', 'model_provider_id', 'TEXT DEFAULT NULL')
+    this.safeAddColumn('projects', 'model_id', 'TEXT DEFAULT NULL')
+    this.safeAddColumn('projects', 'model_variant', 'TEXT DEFAULT NULL')
+  }
+
   // Settings operations
   getSetting(key: string): string | null {
     const db = this.getDb()
@@ -317,6 +325,10 @@ export class DatabaseService {
       description: data.description ?? null,
       tags: data.tags ? JSON.stringify(data.tags) : null,
       language: null,
+      agent_sdk: null,
+      model_provider_id: null,
+      model_id: null,
+      model_variant: null,
       custom_icon: null,
       setup_script: data.setup_script ?? null,
       run_script: data.run_script ?? null,
@@ -328,8 +340,8 @@ export class DatabaseService {
     }
 
     db.prepare(
-      `INSERT INTO projects (id, name, path, description, tags, language, setup_script, run_script, archive_script, auto_assign_port, sort_order, created_at, last_accessed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO projects (id, name, path, description, tags, language, agent_sdk, model_provider_id, model_id, model_variant, setup_script, run_script, archive_script, auto_assign_port, sort_order, created_at, last_accessed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       project.id,
       project.name,
@@ -337,6 +349,10 @@ export class DatabaseService {
       project.description,
       project.tags,
       project.language,
+      project.agent_sdk,
+      project.model_provider_id,
+      project.model_id,
+      project.model_variant,
       project.setup_script,
       project.run_script,
       project.archive_script,
@@ -435,6 +451,22 @@ export class DatabaseService {
     if (data.language !== undefined) {
       updates.push('language = ?')
       values.push(data.language)
+    }
+    if (data.agent_sdk !== undefined) {
+      updates.push('agent_sdk = ?')
+      values.push(data.agent_sdk)
+    }
+    if (data.model_provider_id !== undefined) {
+      updates.push('model_provider_id = ?')
+      values.push(data.model_provider_id)
+    }
+    if (data.model_id !== undefined) {
+      updates.push('model_id = ?')
+      values.push(data.model_id)
+    }
+    if (data.model_variant !== undefined) {
+      updates.push('model_variant = ?')
+      values.push(data.model_variant)
     }
     if (data.custom_icon !== undefined) {
       updates.push('custom_icon = ?')

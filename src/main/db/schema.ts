@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 12
+export const CURRENT_SCHEMA_VERSION = 13
 
 export const SCHEMA_SQL = `
 -- Projects table
@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS projects (
   description TEXT,
   tags TEXT,
   language TEXT,
+  agent_sdk TEXT,
+  model_provider_id TEXT,
+  model_id TEXT,
+  model_variant TEXT,
   setup_script TEXT DEFAULT NULL,
   run_script TEXT DEFAULT NULL,
   archive_script TEXT DEFAULT NULL,
@@ -423,6 +427,15 @@ export const MIGRATIONS: Migration[] = [
       DROP INDEX IF EXISTS idx_usage_entries_session_source;
       DROP TABLE IF EXISTS usage_sync_state;
       DROP TABLE IF EXISTS usage_entries;
+    `
+  },
+  {
+    version: 13,
+    name: 'add_project_model_defaults',
+    up: `-- Project model columns are added idempotently by ensureProjectModelColumns() in database.ts`,
+    down: `
+      -- SQLite does not support DROP COLUMN in a broadly compatible way.
+      -- Columns are left in place on downgrade.
     `
   }
 ]

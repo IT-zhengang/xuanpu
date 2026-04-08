@@ -192,8 +192,8 @@ describe('Session 11: Custom Project Icon', () => {
         ),
         'utf-8'
       )
-      expect(source).toContain('Project Icon')
-      expect(source).toContain('Change')
+      expect(source).toContain("dialogs.projectSettings.icon.label")
+      expect(source).toContain("dialogs.projectSettings.icon.change")
     })
 
     test('ProjectSettingsDialog has Clear button conditional on customIcon', async () => {
@@ -208,7 +208,7 @@ describe('Session 11: Custom Project Icon', () => {
       )
       // Clear button should be conditional on customIcon
       expect(source).toContain('customIcon && (')
-      expect(source).toContain('Clear')
+      expect(source).toContain("dialogs.projectSettings.icon.clear")
     })
 
     test('ProjectSettingsDialog calls pickProjectIcon on Change click', async () => {
@@ -343,7 +343,7 @@ describe('Session 11: Custom Project Icon', () => {
       const fs = await import('fs')
       const path = await import('path')
       const source = fs.readFileSync(
-        path.resolve(__dirname, '../../../src/main/ipc/project-handlers.ts'),
+        path.resolve(__dirname, '../../../src/main/services/project-ops.ts'),
         'utf-8'
       )
       // Should return base64 data URL

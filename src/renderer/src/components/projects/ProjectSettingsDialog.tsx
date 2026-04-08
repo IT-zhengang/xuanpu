@@ -13,14 +13,22 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { useProjectStore } from '@/stores'
+import { AgentSdkSelector } from '@/components/sessions/AgentSdkSelector'
+import { ModelSelector } from '@/components/sessions/ModelSelector'
 import { LanguageIcon } from './LanguageIcon'
 import { useI18n } from '@/i18n/useI18n'
+import { resolveModelForSdk, useSettingsStore, type SelectedModel } from '@/stores/useSettingsStore'
+import type { ProjectAgentSdk } from '@/stores/useProjectStore'
 
 interface Project {
   id: string
   name: string
   path: string
   language: string | null
+  agent_sdk: ProjectAgentSdk | null
+  model_provider_id: string | null
+  model_id: string | null
+  model_variant: string | null
   custom_icon: string | null
   setup_script: string | null
   run_script: string | null
@@ -41,14 +49,27 @@ export function ProjectSettingsDialog({
 }: ProjectSettingsDialogProps): React.JSX.Element {
   const { updateProject } = useProjectStore()
   const { t } = useI18n()
+  const defaultAgentSdk = useSettingsStore((s) => s.defaultAgentSdk) ?? 'opencode'
 
   const [setupScript, setSetupScript] = useState('')
   const [runScript, setRunScript] = useState('')
   const [archiveScript, setArchiveScript] = useState('')
+  const [projectAgentSdk, setProjectAgentSdk] = useState<ProjectAgentSdk | null>(null)
+  const [projectModel, setProjectModel] = useState<SelectedModel | null>(null)
   const [customIcon, setCustomIcon] = useState<string | null>(null)
   const [autoAssignPort, setAutoAssignPort] = useState(false)
   const [saving, setSaving] = useState(false)
   const [pickingIcon, setPickingIcon] = useState(false)
+  const effectiveAgentSdk = projectAgentSdk ?? defaultAgentSdk
+  const effectiveGlobalModel = useSettingsStore((s) =>
+    resolveModelForSdk(effectiveAgentSdk === 'terminal' ? 'opencode' : effectiveAgentSdk, s)
+  )
+  const providerStatusKey = projectAgentSdk
+    ? 'dialogs.projectSettings.status.providerOverride'
+    : 'dialogs.projectSettings.status.providerInherited'
+  const modelStatusKey = projectModel
+    ? 'dialogs.projectSettings.status.modelOverride'
+    : 'dialogs.projectSettings.status.modelInherited'
 
   // Load current values when dialog opens
   useEffect(() => {
@@ -56,6 +77,16 @@ export function ProjectSettingsDialog({
       setSetupScript(project.setup_script ?? '')
       setRunScript(project.run_script ?? '')
       setArchiveScript(project.archive_script ?? '')
+      setProjectAgentSdk(project.agent_sdk ?? null)
+      setProjectModel(
+        project.model_provider_id && project.model_id
+          ? {
+              providerID: project.model_provider_id,
+              modelID: project.model_id,
+              variant: project.model_variant ?? undefined
+            }
+          : null
+      )
       setCustomIcon(project.custom_icon ?? null)
       setAutoAssignPort(project.auto_assign_port ?? false)
     }
@@ -64,6 +95,10 @@ export function ProjectSettingsDialog({
     project.setup_script,
     project.run_script,
     project.archive_script,
+    project.agent_sdk,
+    project.model_provider_id,
+    project.model_id,
+    project.model_variant,
     project.custom_icon,
     project.auto_assign_port
   ])
@@ -99,6 +134,10 @@ export function ProjectSettingsDialog({
         setup_script: setupScript.trim() || null,
         run_script: runScript.trim() || null,
         archive_script: archiveScript.trim() || null,
+        agent_sdk: projectAgentSdk,
+        model_provider_id: projectModel?.providerID ?? null,
+        model_id: projectModel?.modelID ?? null,
+        model_variant: projectModel?.variant ?? null,
         custom_icon: customIcon,
         auto_assign_port: autoAssignPort
       })
@@ -177,6 +216,76 @@ export function ProjectSettingsDialog({
               </div>
               <Switch checked={autoAssignPort} onCheckedChange={setAutoAssignPort} />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              {t('dialogs.projectSettings.defaultProvider.label')}
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t('dialogs.projectSettings.defaultProvider.description')}
+            </p>
+            <div className="flex items-center gap-2">
+              <AgentSdkSelector
+                value={effectiveAgentSdk}
+                onChange={(sdk) => setProjectAgentSdk(sdk)}
+              />
+              {projectAgentSdk && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2"
+                  onClick={() => setProjectAgentSdk(null)}
+                >
+                  {t('dialogs.projectSettings.useGlobal')}
+                </Button>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {t(providerStatusKey, {
+                provider: t(
+                  `common.aiProviders.${effectiveAgentSdk === 'claude-code' ? 'claudeCode' : effectiveAgentSdk}`
+                )
+              })}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              {t('dialogs.projectSettings.defaultModel.label')}
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t('dialogs.projectSettings.defaultModel.description')}
+            </p>
+            {effectiveAgentSdk === 'terminal' ? (
+              <div className="rounded-md border border-dashed border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                {t('dialogs.projectSettings.defaultModel.terminalHint')}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <ModelSelector
+                  value={projectModel ?? effectiveGlobalModel}
+                  onChange={(model) => setProjectModel(model)}
+                  agentSdkOverride={effectiveAgentSdk === 'terminal' ? 'opencode' : effectiveAgentSdk}
+                  showProviderPrefix={false}
+                />
+                {projectModel && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => setProjectModel(null)}
+                  >
+                    {t('dialogs.projectSettings.useGlobal')}
+                  </Button>
+                )}
+              </div>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              {t(modelStatusKey, {
+                model: projectModel?.modelID ?? effectiveGlobalModel?.modelID ?? t('dialogs.projectSettings.status.noModel')
+              })}
+            </p>
           </div>
 
           {/* Setup Script */}

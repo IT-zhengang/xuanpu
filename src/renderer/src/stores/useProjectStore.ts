@@ -1,5 +1,8 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
+import { resolveModelForSdk, useSettingsStore, type SelectedModel } from './useSettingsStore'
+
+export type ProjectAgentSdk = 'opencode' | 'claude-code' | 'codex' | 'terminal'
 
 // Project type matching the database schema
 interface Project {
@@ -9,6 +12,10 @@ interface Project {
   description: string | null
   tags: string | null
   language: string | null
+  agent_sdk: ProjectAgentSdk | null
+  model_provider_id: string | null
+  model_id: string | null
+  model_variant: string | null
   custom_icon: string | null
   setup_script: string | null
   run_script: string | null
@@ -43,6 +50,10 @@ interface ProjectState {
       description?: string | null
       tags?: string[] | null
       language?: string | null
+      agent_sdk?: ProjectAgentSdk | null
+      model_provider_id?: string | null
+      model_id?: string | null
+      model_variant?: string | null
       custom_icon?: string | null
       setup_script?: string | null
       run_script?: string | null
@@ -197,6 +208,10 @@ export const useProjectStore = create<ProjectState>()(
           description?: string | null
           tags?: string[] | null
           language?: string | null
+          agent_sdk?: ProjectAgentSdk | null
+          model_provider_id?: string | null
+          model_id?: string | null
+          model_variant?: string | null
           custom_icon?: string | null
           setup_script?: string | null
           run_script?: string | null
@@ -364,3 +379,34 @@ export const useProjectStore = create<ProjectState>()(
     }
   )
 )
+
+export function getProjectModel(projectId: string): SelectedModel | null {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  if (!project?.model_provider_id || !project.model_id) return null
+
+  return {
+    providerID: project.model_provider_id,
+    modelID: project.model_id,
+    variant: project.model_variant ?? undefined
+  }
+}
+
+export function getProjectAgentSdk(projectId: string): ProjectAgentSdk | null {
+  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+  return project?.agent_sdk ?? null
+}
+
+export function resolveProjectAgentSdk(projectId: string): ProjectAgentSdk {
+  return getProjectAgentSdk(projectId) ?? useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
+}
+
+export function resolveProjectModel(
+  projectId: string,
+  agentSdk?: ProjectAgentSdk
+): SelectedModel | null {
+  const explicitModel = getProjectModel(projectId)
+  if (explicitModel) return explicitModel
+
+  const sdk = agentSdk ?? useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
+  return resolveModelForSdk(sdk === 'terminal' ? 'opencode' : sdk)
+}

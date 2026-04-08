@@ -47,6 +47,7 @@ import {
   useVimModeStore,
   useSettingsStore
 } from '@/stores'
+import { applyProjectModelToWorktree } from '@/stores/useWorktreeStore'
 import { HintBadge } from '@/components/ui/HintBadge'
 import { WorktreeList, BranchPickerDialog } from '@/components/worktrees'
 import { LanguageIcon } from './LanguageIcon'
@@ -264,6 +265,7 @@ export function ProjectItem({
         prNumber
       )
       if (result.success && result.worktree) {
+        void applyProjectModelToWorktree(result.worktree.id, project.id)
         useWorktreeStore.getState().loadWorktrees(project.id)
         useWorktreeStore.getState().selectWorktree(result.worktree.id)
         toast.success(t('projectItem.toasts.worktreeCreated', { name: branchName }))

@@ -217,6 +217,23 @@ describe('Settings i18n', () => {
       '单次最多拖入 10 个文件'
     )
     expect(translate('zh-CN', 'dialogs.projectSettings.runScript.placeholder')).toBe('pnpm run dev')
+    expect(translate('zh-CN', 'dialogs.projectSettings.defaultProvider.label')).toBe(
+      '默认 AI 提供方'
+    )
+    expect(translate('zh-CN', 'dialogs.projectSettings.defaultModel.terminalHint')).toContain(
+      '终端会话不使用模型'
+    )
+    expect(translate('zh-CN', 'dialogs.projectSettings.useGlobal')).toBe('跟随全局')
+    expect(translate('zh-CN', 'dialogs.projectSettings.status.providerInherited', { provider: 'Codex' })).toBe(
+      '当前跟随全局提供方：Codex'
+    )
+    expect(translate('zh-CN', 'sessionView.composer.terminalHint')).toBe(
+      '终端会话不会自动套用模型配置。'
+    )
+    expect(translate('zh-CN', 'sessionView.composer.runtimeOverride', { provider: 'Claude Code' })).toBe(
+      '运行时已单独覆盖：Claude Code'
+    )
+    expect(translate('zh-CN', 'common.aiProviders.terminal')).toBe('终端')
     expect(translate('zh-CN', 'loading.default')).toBe('加载中...')
     expect(translate('zh-CN', 'toolViews.grep.showAllResults', { count: 12 })).toBe(
       '显示全部 12 条结果'

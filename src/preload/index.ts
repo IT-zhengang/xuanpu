@@ -34,6 +34,10 @@ const db = {
         description?: string | null
         tags?: string[] | null
         language?: string | null
+        agent_sdk?: 'opencode' | 'claude-code' | 'codex' | 'terminal' | null
+        model_provider_id?: string | null
+        model_id?: string | null
+        model_variant?: string | null
         custom_icon?: string | null
         setup_script?: string | null
         run_script?: string | null

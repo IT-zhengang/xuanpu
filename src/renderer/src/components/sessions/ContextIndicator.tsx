@@ -1,12 +1,13 @@
 import { useMemo } from 'react'
 import { getModelLimitKey, useContextStore } from '@/stores/useContextStore'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n/useI18n'
 
 interface ContextIndicatorProps {
   sessionId: string
   modelId: string
   providerId?: string
+  variant?: 'default' | 'compact'
 }
 
 function formatNumber(n: number): string {
@@ -14,16 +15,17 @@ function formatNumber(n: number): string {
 }
 
 function getRingColor(percent: number): string {
-  if (percent >= 90) return '#d9485f'
-  if (percent >= 80) return '#d17a22'
-  if (percent >= 60) return '#b28a17'
-  return '#237a68'
+  if (percent >= 90) return '#ea580c'
+  if (percent >= 75) return '#f97316'
+  if (percent >= 50) return '#fb923c'
+  return '#fdba74'
 }
 
 export function ContextIndicator({
   sessionId,
   modelId,
-  providerId
+  providerId,
+  variant = 'default'
 }: ContextIndicatorProps): React.JSX.Element | null {
   const { t } = useI18n()
   const tokenInfo = useContextStore((state) => state.tokensBySession[sessionId])
@@ -62,100 +64,114 @@ export function ContextIndicator({
   // Don't render if no limit or no usage yet
   if (!limit && used === 0) return null
 
+  const compact = variant === 'compact'
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div
-          className="flex h-8 w-8 shrink-0 cursor-default items-center justify-center rounded-full border border-border/60 bg-background/85 shadow-sm"
-          data-testid="context-indicator"
-          aria-label={
-            typeof limit === 'number'
-              ? t('contextIndicator.summary.withLimit', {
+    <TooltipProvider delayDuration={0} skipDelayDuration={0} disableHoverableContent>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            className={
+              compact
+                ? 'flex h-8 w-8 shrink-0 cursor-default items-center justify-center rounded-full border border-border/65 bg-background/90 shadow-sm transition-colors hover:bg-muted/40 dark:bg-background/75 dark:hover:bg-muted/25'
+                : 'flex h-8 w-8 shrink-0 cursor-default items-center justify-center rounded-full border border-border/65 bg-background/90 shadow-sm transition-colors hover:bg-muted/40 dark:bg-background/75 dark:hover:bg-muted/25'
+            }
+            data-testid="context-indicator"
+            aria-label={
+              typeof limit === 'number'
+                ? t('contextIndicator.summary.withLimit', {
+                    used: formatNumber(used),
+                    limit: formatNumber(limit),
+                    percent: percentLabel
+                  })
+                : t('contextIndicator.summary.noLimit', { used: formatNumber(used) })
+            }
+          >
+            <div className={compact ? 'relative h-7 w-7' : 'relative h-7 w-7'}>
+              <svg
+                className={`${compact ? 'h-7 w-7' : 'h-7 w-7'} -rotate-90`}
+                viewBox="0 0 28 28"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="14"
+                  cy="14"
+                  r="12"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  fill="none"
+                  className='text-muted/75 dark:text-muted/30'
+                />
+                <circle
+                  cx="14"
+                  cy="14"
+                  r="12"
+                  stroke={ringColor}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  fill="none"
+                  strokeDasharray={circumference}
+                  strokeDashoffset={strokeOffset}
+                  className="transition-all duration-200"
+                  data-testid="context-ring"
+                />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center">
+                <span
+                  className='h-1.5 w-1.5 rounded-full bg-foreground/35'
+                />
+              </span>
+            </div>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top" sideOffset={6} className="max-w-[260px]">
+          <div className="space-y-1.5">
+            <div className="font-medium">{t('contextIndicator.title')}</div>
+            {typeof limit === 'number' ? (
+              <div>
+                {t('contextIndicator.summary.withLimit', {
                   used: formatNumber(used),
                   limit: formatNumber(limit),
-                  percent: percentLabel
-                })
-              : t('contextIndicator.summary.noLimit', { used: formatNumber(used) })
-          }
-        >
-          <div className="relative h-7 w-7">
-            <svg className="h-7 w-7 -rotate-90" viewBox="0 0 28 28" aria-hidden="true">
-              <circle
-                cx="14"
-                cy="14"
-                r="12"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                fill="none"
-                className="text-muted/80"
-              />
-              <circle
-                cx="14"
-                cy="14"
-                r="12"
-                stroke={ringColor}
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                fill="none"
-                strokeDasharray={circumference}
-                strokeDashoffset={strokeOffset}
-                className="transition-all duration-300"
-                data-testid="context-ring"
-              />
-            </svg>
-            <span className="absolute inset-0 flex items-center justify-center">
-              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/45" />
-            </span>
+                  percent: percent ?? 0
+                })}
+              </div>
+            ) : (
+              <div>{t('contextIndicator.summary.noLimit', { used: formatNumber(used) })}</div>
+            )}
+            <div className="border-t border-background/20 pt-1.5 space-y-0.5 text-[10px] opacity-80">
+              <div>
+                {t('contextIndicator.labels.input')}: {formatNumber(tokens.input)}
+              </div>
+              <div>
+                {t('contextIndicator.labels.cacheRead')}: {formatNumber(tokens.cacheRead)}
+              </div>
+              <div>
+                {t('contextIndicator.labels.cacheWrite')}: {formatNumber(tokens.cacheWrite)}
+              </div>
+            </div>
+            {(tokens.output > 0 || tokens.reasoning > 0) && (
+              <div className="border-t border-background/20 pt-1.5 space-y-0.5 text-[10px] opacity-60">
+                <div className="opacity-100 text-[10px]">{t('contextIndicator.generated.title')}</div>
+                {tokens.output > 0 && (
+                  <div>
+                    {t('contextIndicator.generated.output')}: {formatNumber(tokens.output)}
+                  </div>
+                )}
+                {tokens.reasoning > 0 && (
+                  <div>
+                    {t('contextIndicator.generated.reasoning')}: {formatNumber(tokens.reasoning)}
+                  </div>
+                )}
+              </div>
+            )}
+            {cost > 0 && (
+              <div className="border-t border-background/20 pt-1.5">
+                <div>{t('contextIndicator.cost.session', { cost: `$${cost.toFixed(4)}` })}</div>
+              </div>
+            )}
           </div>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={8} className="max-w-[260px]">
-        <div className="space-y-1.5">
-          <div className="font-medium">{t('contextIndicator.title')}</div>
-          {typeof limit === 'number' ? (
-            <div>
-              {t('contextIndicator.summary.withLimit', {
-                used: formatNumber(used),
-                limit: formatNumber(limit),
-                percent: percent ?? 0
-              })}
-            </div>
-          ) : (
-            <div>{t('contextIndicator.summary.noLimit', { used: formatNumber(used) })}</div>
-          )}
-          <div className="border-t border-background/20 pt-1.5 space-y-0.5 text-[10px] opacity-80">
-            <div>
-              {t('contextIndicator.labels.input')}: {formatNumber(tokens.input)}
-            </div>
-            <div>
-              {t('contextIndicator.labels.cacheRead')}: {formatNumber(tokens.cacheRead)}
-            </div>
-            <div>
-              {t('contextIndicator.labels.cacheWrite')}: {formatNumber(tokens.cacheWrite)}
-            </div>
-          </div>
-          {(tokens.output > 0 || tokens.reasoning > 0) && (
-            <div className="border-t border-background/20 pt-1.5 space-y-0.5 text-[10px] opacity-60">
-              <div className="opacity-100 text-[10px]">{t('contextIndicator.generated.title')}</div>
-              {tokens.output > 0 && (
-                <div>
-                  {t('contextIndicator.generated.output')}: {formatNumber(tokens.output)}
-                </div>
-              )}
-              {tokens.reasoning > 0 && (
-                <div>
-                  {t('contextIndicator.generated.reasoning')}: {formatNumber(tokens.reasoning)}
-                </div>
-              )}
-            </div>
-          )}
-          {cost > 0 && (
-            <div className="border-t border-background/20 pt-1.5">
-              <div>{t('contextIndicator.cost.session', { cost: `$${cost.toFixed(4)}` })}</div>
-            </div>
-          )}
-        </div>
-      </TooltipContent>
-    </Tooltip>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }

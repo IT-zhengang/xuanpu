@@ -18,6 +18,10 @@ interface ProjectRow {
   description: string | null
   tags: string | null
   language: string | null
+  agent_sdk: 'opencode' | 'claude-code' | 'codex' | 'terminal' | null
+  model_provider_id: string | null
+  model_id: string | null
+  model_variant: string | null
   custom_icon: string | null
   setup_script: string | null
   run_script: string | null
@@ -154,6 +158,10 @@ export class MockDatabaseService {
       description: data.description ?? null,
       tags: data.tags ? JSON.stringify(data.tags) : null,
       language: null,
+      agent_sdk: null,
+      model_provider_id: null,
+      model_id: null,
+      model_variant: null,
       custom_icon: null,
       setup_script: data.setup_script ?? null,
       run_script: data.run_script ?? null,

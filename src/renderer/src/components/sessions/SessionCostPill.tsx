@@ -20,6 +20,7 @@ interface SessionCostPillProps {
     cacheRead: number
     cacheWrite: number
   } | null
+  variant?: 'default' | 'compact'
 }
 
 function formatCurrency(amount: number): string {
@@ -49,7 +50,8 @@ function formatDuration(seconds: number): string {
 export function SessionCostPill({
   summary,
   fallbackCost,
-  fallbackTokens
+  fallbackTokens,
+  variant = 'default'
 }: SessionCostPillProps): React.JSX.Element | null {
   const { t } = useI18n()
   const totalCost = summary?.total_cost ?? fallbackCost
@@ -62,6 +64,8 @@ export function SessionCostPill({
 
   if (totalCost <= 0) return null
 
+  const compact = variant === 'compact'
+
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -70,12 +74,14 @@ export function SessionCostPill({
           variant="ghost"
           size="sm"
           className={cn(
-            'h-7 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 text-[12px] font-medium text-emerald-700 shadow-[0_0_0_1px_rgba(16,185,129,0.08)] transition-colors hover:bg-emerald-500/14 hover:text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/12 dark:text-emerald-200 dark:hover:bg-emerald-500/18'
+            compact
+              ? 'h-7 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 text-[12px] font-medium text-emerald-700 shadow-[0_0_0_1px_rgba(16,185,129,0.08)] transition-colors hover:bg-emerald-500/14 hover:text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/12 dark:text-emerald-200 dark:hover:bg-emerald-500/18'
+              : 'h-7 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 text-[12px] font-medium text-emerald-700 shadow-[0_0_0_1px_rgba(16,185,129,0.08)] transition-colors hover:bg-emerald-500/14 hover:text-emerald-800 dark:border-emerald-400/30 dark:bg-emerald-500/12 dark:text-emerald-200 dark:hover:bg-emerald-500/18'
           )}
           data-testid="session-cost-pill"
         >
-          <DollarSign className="h-3.5 w-3.5" />
-          <span className="font-mono">{formatCurrency(totalCost)}</span>
+          <DollarSign className={compact ? 'h-3.5 w-3.5' : 'h-3.5 w-3.5'} />
+          <span className='font-mono'>{formatCurrency(totalCost)}</span>
           {summary?.partial && <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />}
         </Button>
       </PopoverTrigger>

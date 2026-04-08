@@ -10,6 +10,20 @@ type MessageTree = {
 
 export const messages: Record<AppLocale, MessageTree> = {
   en: {
+    common: {
+      aiProviders: {
+        opencode: 'OpenCode',
+        claudeCode: 'Claude Code',
+        codex: 'Codex',
+        terminal: 'Terminal'
+      },
+      aiProvidersShort: {
+        opencode: 'OpenCode',
+        claudeCode: 'Claude',
+        codex: 'Codex',
+        terminal: 'Terminal'
+      }
+    },
     settings: {
       title: 'Settings',
       sections: {
@@ -108,6 +122,7 @@ export const messages: Record<AppLocale, MessageTree> = {
         description: 'Configure which AI models to use for different modes and commands',
         priority: {
           title: 'Model selection priority:',
+          project: 'Project default',
           worktree: "Worktree's last-used model (if any)",
           mode: 'Mode-specific default (configured below)',
           global: 'Global default model',
@@ -957,6 +972,14 @@ export const messages: Record<AppLocale, MessageTree> = {
         waitingCommandApprovalResponse: 'Waiting for command approval response...',
         planFeedbackPlaceholder: 'Send feedback to revise the plan...',
         messagePlaceholder: 'Type your message...',
+        terminalHint: 'Terminal sessions do not apply a model automatically.',
+        runtimeLabel: 'Runtime',
+        runtimeInherited: 'Runtime follows project/global: {provider}',
+        runtimeOverride: 'Runtime override: {provider}',
+        modelLabel: 'Model',
+        modelInherited: 'Model follows project/global: {model}',
+        modelOverride: 'Model override: {model}',
+        noModel: 'No model',
         blockedByQuestionTitle: 'Answer the current question to continue',
         blockedByPermissionTitle: 'Respond to the current permission request',
         blockedByCommandApprovalTitle: 'Review the current command approval request',
@@ -1846,6 +1869,7 @@ export const messages: Record<AppLocale, MessageTree> = {
       },
       projectSettings: {
         title: 'Project Settings',
+        useGlobal: 'Use global',
         icon: {
           label: 'Project Icon',
           description: 'Custom icon displayed in the sidebar. Supports SVG, PNG, JPG, and WebP.',
@@ -1859,6 +1883,25 @@ export const messages: Record<AppLocale, MessageTree> = {
           label: 'Auto-assign Port',
           description:
             'Assign a unique port to each worktree and inject PORT into run/setup scripts. Ports start at 3011.'
+        },
+        defaultProvider: {
+          label: 'Default AI provider',
+          description:
+            'New sessions and branches inherit this runtime first. Leave it on global to follow the app-wide provider setting.'
+        },
+        defaultModel: {
+          label: 'Default AI model',
+          description:
+            "New sessions and new branches inherit this project model by default. Clear it to follow the selected provider's global model.",
+          terminalHint:
+            'Terminal sessions do not use a model. Switch the provider to OpenCode, Claude Code, or Codex to set a project model override.'
+        },
+        status: {
+          providerInherited: 'Currently following the global provider: {provider}',
+          providerOverride: 'Project override active: {provider}',
+          modelInherited: 'Currently following the inherited model: {model}',
+          modelOverride: 'Project model override active: {model}',
+          noModel: 'No model'
         },
         setupScript: {
           label: 'Setup Script',
@@ -2070,6 +2113,20 @@ export const messages: Record<AppLocale, MessageTree> = {
     }
   },
   'zh-CN': {
+    common: {
+      aiProviders: {
+        opencode: 'OpenCode',
+        claudeCode: 'Claude Code',
+        codex: 'Codex',
+        terminal: '终端'
+      },
+      aiProvidersShort: {
+        opencode: 'OpenCode',
+        claudeCode: 'Claude',
+        codex: 'Codex',
+        terminal: '终端'
+      }
+    },
     settings: {
       title: '设置',
       sections: {
@@ -2160,6 +2217,7 @@ export const messages: Record<AppLocale, MessageTree> = {
         description: '配置不同模式和命令默认使用的 AI 模型',
         priority: {
           title: '模型选择优先级：',
+          project: '项目默认配置',
           worktree: 'Worktree 上次使用的模型（如果有）',
           mode: '模式专属默认模型（下方配置）',
           global: '全局默认模型',
@@ -2998,6 +3056,14 @@ export const messages: Record<AppLocale, MessageTree> = {
         waitingCommandApprovalResponse: '正在等待命令审批回复...',
         planFeedbackPlaceholder: '输入反馈以修改计划...',
         messagePlaceholder: '输入你的消息...',
+        terminalHint: '终端会话不会自动套用模型配置。',
+        runtimeLabel: '运行时',
+        runtimeInherited: '运行时跟随项目/全局：{provider}',
+        runtimeOverride: '运行时已单独覆盖：{provider}',
+        modelLabel: '模型',
+        modelInherited: '模型跟随项目/全局：{model}',
+        modelOverride: '模型已单独覆盖：{model}',
+        noModel: '未设置模型',
         blockedByQuestionTitle: '先回答当前问题，再继续对话',
         blockedByPermissionTitle: '先处理当前授权请求',
         blockedByCommandApprovalTitle: '先处理当前命令审批请求',
@@ -3886,6 +3952,7 @@ export const messages: Record<AppLocale, MessageTree> = {
       },
       projectSettings: {
         title: '项目设置',
+        useGlobal: '跟随全局',
         icon: {
           label: '项目图标',
           description: '显示在侧边栏中的自定义图标，支持 SVG、PNG、JPG 和 WebP。',
@@ -3899,6 +3966,24 @@ export const messages: Record<AppLocale, MessageTree> = {
           label: '自动分配端口',
           description:
             '为每个 worktree 分配唯一端口，并将 PORT 注入 run/setup 脚本。端口从 3011 开始。'
+        },
+        defaultProvider: {
+          label: '默认 AI 提供方',
+          description: '新建会话和分支会优先继承这里的运行时配置。清空后将跟随应用的全局设置。'
+        },
+        defaultModel: {
+          label: '默认 AI 模型',
+          description:
+            '新建会话和新分支默认会继承这里的项目模型。清空后将跟随当前提供方对应的全局模型。',
+          terminalHint:
+            '终端会话不使用模型。若要设置项目模型覆盖，请先把提供方切换为 OpenCode、Claude Code 或 Codex。'
+        },
+        status: {
+          providerInherited: '当前跟随全局提供方：{provider}',
+          providerOverride: '当前启用项目覆盖提供方：{provider}',
+          modelInherited: '当前跟随继承模型：{model}',
+          modelOverride: '当前启用项目模型覆盖：{model}',
+          noModel: '未设置模型'
         },
         setupScript: {
           label: 'Setup 脚本',

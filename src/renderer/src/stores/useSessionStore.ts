@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { SelectedModel } from './useSettingsStore'
-import { useSettingsStore } from './useSettingsStore'
+import { resolveModelForSdk, useSettingsStore } from './useSettingsStore'
 import { useGitStore } from './useGitStore'
+import { getProjectModel, resolveProjectAgentSdk, type ProjectAgentSdk } from './useProjectStore'
 import { useWorktreeStore } from './useWorktreeStore'
 import { translate } from '@/i18n/useI18n'
 import { DEFAULT_LOCALE } from '@/i18n/messages'
@@ -98,9 +99,11 @@ interface SessionState {
   reorderTabs: (worktreeId: string, fromIndex: number, toIndex: number) => void
   getSessionsForWorktree: (worktreeId: string) => Session[]
   getTabOrderForWorktree: (worktreeId: string) => string[]
+  getSessionById: (sessionId: string) => Session | null
   getSessionMode: (sessionId: string) => SessionMode
   toggleSessionMode: (sessionId: string) => Promise<void>
   setSessionMode: (sessionId: string, mode: SessionMode) => Promise<void>
+  setSessionAgentSdk: (sessionId: string, agentSdk: ProjectAgentSdk) => Promise<void>
   setSessionModel: (
     sessionId: string,
     model: SelectedModel,
@@ -159,6 +162,30 @@ function findSessionScope(
     }
   }
   return null
+}
+
+function resolveSessionDefaultModel(
+  sessionSdk: ProjectAgentSdk,
+  projectId?: string | null,
+  mode?: SessionMode
+): SelectedModel | null {
+  if (sessionSdk === 'terminal') return null
+
+  if (projectId) {
+    const projectModel = getProjectModel(projectId)
+    if (projectModel) return projectModel
+  }
+
+  const settings = useSettingsStore.getState()
+  const configuredDefaultSdk = settings.defaultAgentSdk ?? 'opencode'
+  const safeSdk = sessionSdk === 'terminal' ? 'opencode' : sessionSdk
+
+  if (safeSdk === configuredDefaultSdk) {
+    const modeModel = settings.getModelForMode(mode ?? 'build')
+    if (modeModel) return modeModel
+  }
+
+  return resolveModelForSdk(safeSdk, settings)
 }
 
 export const useSessionStore = create<SessionState>()(
@@ -282,62 +309,13 @@ export const useSessionStore = create<SessionState>()(
         initialMode?: SessionMode
       ) => {
         try {
-          // Resolve default agent SDK from settings
-          const { useSettingsStore } = await import('./useSettingsStore')
-          const defaultAgentSdk =
-            agentSdkOverride ?? useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
+          const defaultAgentSdk = agentSdkOverride ?? resolveProjectAgentSdk(projectId)
 
           const isTerminal = defaultAgentSdk === 'terminal'
 
-          // Terminal sessions skip model resolution entirely
-          let defaultModel: { providerID: string; modelID: string; variant?: string } | null = null
-
-          if (!isTerminal) {
-            const { resolveModelForSdk } = await import('./useSettingsStore')
-            const configuredDefaultSdk = useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
-
-            // Priority 1: mode-specific default (only when session SDK matches the
-            // configured default — mode defaults are set in that SDK's context)
-            if (defaultAgentSdk === configuredDefaultSdk) {
-              const modeModel = useSettingsStore.getState().getModelForMode(initialMode ?? 'build')
-              if (modeModel) {
-                defaultModel = modeModel
-              }
-            }
-
-            // Priority 2: per-provider default → (legacy) global default
-            if (!defaultModel) {
-              defaultModel = resolveModelForSdk(defaultAgentSdk)
-            }
-
-            // Legacy worktree fallback only when per-provider feature not yet active
-            if (!defaultModel) {
-              const settingsState = useSettingsStore.getState()
-              const hasPerProviderDefaults =
-                Object.keys(settingsState.selectedModelByProvider).length > 0
-              if (!hasPerProviderDefaults) {
-                const worktree = useWorktreeStore.getState().worktreesByProject
-                let worktreeRecord:
-                  | {
-                      last_model_provider_id: string | null
-                      last_model_id: string | null
-                      last_model_variant: string | null
-                    }
-                  | undefined
-                for (const worktrees of worktree.values()) {
-                  worktreeRecord = worktrees.find((w) => w.id === worktreeId)
-                  if (worktreeRecord) break
-                }
-                if (worktreeRecord?.last_model_id) {
-                  defaultModel = {
-                    providerID: worktreeRecord.last_model_provider_id!,
-                    modelID: worktreeRecord.last_model_id,
-                    variant: worktreeRecord.last_model_variant ?? undefined
-                  }
-                }
-              }
-            }
-          }
+          const defaultModel = isTerminal
+            ? null
+            : resolveSessionDefaultModel(defaultAgentSdk, projectId, initialMode)
 
           const existingSessions = get().sessionsByWorktree.get(worktreeId) || []
           const sessionNumber = existingSessions.length + 1
@@ -812,11 +790,83 @@ export const useSessionStore = create<SessionState>()(
         await get().applyModeDefaultModel(sessionId, mode)
       },
 
+      setSessionAgentSdk: async (sessionId: string, agentSdk: ProjectAgentSdk) => {
+        const session = get().getSessionById(sessionId)
+        if (!session || session.agent_sdk === agentSdk) return
+
+        const nextModel = resolveSessionDefaultModel(agentSdk, session.project_id, session.mode)
+
+        set((state) => {
+          const newWorktreeSessionsMap = new Map(state.sessionsByWorktree)
+          for (const [worktreeId, sessions] of newWorktreeSessionsMap.entries()) {
+            const updated = sessions.map((item) =>
+              item.id === sessionId
+                ? {
+                    ...item,
+                    agent_sdk: agentSdk,
+                    opencode_session_id: null,
+                    model_provider_id: nextModel?.providerID ?? null,
+                    model_id: nextModel?.modelID ?? null,
+                    model_variant: nextModel?.variant ?? null
+                  }
+                : item
+            )
+            if (updated.some((item, index) => item !== sessions[index])) {
+              newWorktreeSessionsMap.set(worktreeId, updated)
+            }
+          }
+
+          const newConnectionSessionsMap = new Map(state.sessionsByConnection)
+          for (const [connectionId, sessions] of newConnectionSessionsMap.entries()) {
+            const updated = sessions.map((item) =>
+              item.id === sessionId
+                ? {
+                    ...item,
+                    agent_sdk: agentSdk,
+                    opencode_session_id: null,
+                    model_provider_id: nextModel?.providerID ?? null,
+                    model_id: nextModel?.modelID ?? null,
+                    model_variant: nextModel?.variant ?? null
+                  }
+                : item
+            )
+            if (updated.some((item, index) => item !== sessions[index])) {
+              newConnectionSessionsMap.set(connectionId, updated)
+            }
+          }
+
+          return {
+            sessionsByWorktree: newWorktreeSessionsMap,
+            sessionsByConnection: newConnectionSessionsMap
+          }
+        })
+
+        try {
+          await window.db.session.update(sessionId, {
+            agent_sdk: agentSdk,
+            opencode_session_id: null,
+            model_provider_id: nextModel?.providerID ?? null,
+            model_id: nextModel?.modelID ?? null,
+            model_variant: nextModel?.variant ?? null
+          })
+        } catch (error) {
+          console.error('Failed to persist session runtime:', error)
+        }
+
+        if (!nextModel || agentSdk === 'terminal') return
+
+        try {
+          await window.agentOps.setModel({ ...nextModel, runtimeId: agentSdk })
+        } catch (error) {
+          console.error('Failed to push runtime model to agent backend:', error)
+        }
+      },
+
       // Set model for a specific session (per-session model selection, scope-agnostic)
       setSessionModel: async (
         sessionId: string,
         model: SelectedModel,
-        options?: { skipGlobalUpdate?: boolean }
+        _options?: { skipGlobalUpdate?: boolean }
       ) => {
         // Update local state immediately (search both maps)
         set((state) => {
@@ -899,19 +949,6 @@ export const useSessionStore = create<SessionState>()(
           console.error('Failed to push model to agent backend:', error)
         }
 
-        // Update per-provider last-used model so new worktrees inherit it
-        // Skip when auto-applying mode defaults — those shouldn't rewrite global preferences
-        if (!options?.skipGlobalUpdate) {
-          try {
-            const { useSettingsStore } = await import('./useSettingsStore')
-            useSettingsStore
-              .getState()
-              .setSelectedModelForSdk(agentSdk, model, { skipBackendPush: true })
-          } catch {
-            /* non-critical */
-          }
-        }
-
         // Also persist as the worktree's last-used model (only for worktree sessions)
         const scope = findSessionScope(get(), sessionId)
         if (scope?.type === 'worktree') {
@@ -931,27 +968,17 @@ export const useSessionStore = create<SessionState>()(
 
       // Apply mode-specific default model when toggling modes
       applyModeDefaultModel: async (sessionId: string, newMode: SessionMode) => {
-        // Import settings store dynamically to avoid circular deps
-        const { useSettingsStore, resolveModelForSdk } = await import('./useSettingsStore')
-
         const session = get().getSessionById(sessionId)
-        const settings = useSettingsStore.getState()
-        const sessionSdk = session?.agent_sdk ?? settings.defaultAgentSdk ?? 'opencode'
-        if (sessionSdk === 'terminal') return
-
-        const configuredDefaultSdk = settings.defaultAgentSdk ?? 'opencode'
-
-        // Mode defaults are configured in the context of the default SDK.
-        // Only apply them when the session SDK matches; otherwise fall back to per-SDK default.
-        const modeDefault =
-          sessionSdk === configuredDefaultSdk ? settings.getModelForMode(newMode) : null
-        const newModeDefault = modeDefault ?? resolveModelForSdk(sessionSdk, settings)
+        const sessionSdk = session?.agent_sdk ?? useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
+        const newModeDefault = resolveSessionDefaultModel(
+          sessionSdk,
+          session?.project_id,
+          newMode
+        )
         if (!newModeDefault) {
-          // No defaults configured, keep current model
           return
         }
 
-        // Apply the new mode's default model (without rewriting global preferences)
         await get().setSessionModel(sessionId, newModeDefault, { skipGlobalUpdate: true })
       },
 
@@ -1265,37 +1292,11 @@ export const useSessionStore = create<SessionState>()(
 
           const projectId = result.connection.members[0].project_id
 
-          // Determine default model and agent SDK from global settings
-          let defaultModel: { providerID: string; modelID: string; variant?: string } | null = null
-          let defaultAgentSdk: 'opencode' | 'claude-code' | 'codex' | 'terminal' = 'opencode'
-          try {
-            const { useSettingsStore } = await import('./useSettingsStore')
-            defaultAgentSdk =
-              agentSdkOverride ?? useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
-            // Terminal sessions skip model resolution
-            if (defaultAgentSdk !== 'terminal') {
-              const configuredDefaultSdk = useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
-
-              // Priority 1: mode-specific default (only when session SDK matches the
-              // configured default — mode defaults are set in that SDK's context)
-              if (defaultAgentSdk === configuredDefaultSdk) {
-                const modeModel = useSettingsStore
-                  .getState()
-                  .getModelForMode(initialMode ?? 'build')
-                if (modeModel) {
-                  defaultModel = modeModel
-                }
-              }
-
-              // Priority 2: per-provider default → (legacy) global default
-              if (!defaultModel) {
-                const { resolveModelForSdk } = await import('./useSettingsStore')
-                defaultModel = resolveModelForSdk(defaultAgentSdk)
-              }
-            }
-          } catch {
-            /* non-critical */
-          }
+          const defaultAgentSdk = agentSdkOverride ?? resolveProjectAgentSdk(projectId)
+          const defaultModel =
+            defaultAgentSdk === 'terminal'
+              ? null
+              : resolveSessionDefaultModel(defaultAgentSdk, projectId, initialMode)
 
           const isTerminal = defaultAgentSdk === 'terminal'
           const existingSessions = get().sessionsByConnection.get(connectionId) || []

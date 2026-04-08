@@ -1,10 +1,11 @@
 import { create } from 'zustand'
-import { useProjectStore } from './useProjectStore'
+import { resolveProjectModel, useProjectStore } from './useProjectStore'
 import { useScriptStore, killRunScript } from './useScriptStore'
 import { useSessionStore } from './useSessionStore'
 import { useWorktreeStatusStore } from './useWorktreeStatusStore'
 import { useGitStore } from './useGitStore'
 import type { SelectedModel } from './useSettingsStore'
+import { useSettingsStore } from './useSettingsStore'
 import { toast } from '@/lib/toast'
 import { deleteBuffer } from '@/lib/output-ring-buffer'
 import { registerWorktreeClear, clearConnectionSelection } from './store-coordination'
@@ -60,6 +61,27 @@ export function fireSetupScript(projectId: string, worktreeId: string, cwd: stri
     useScriptStore.getState().setSetupRunning(worktreeId, false)
     unsub()
   })
+}
+
+export async function applyProjectModelToWorktree(
+  worktreeId: string,
+  projectId: string
+): Promise<void> {
+  const defaultAgentSdk = useSettingsStore.getState().defaultAgentSdk ?? 'opencode'
+  const model = resolveProjectModel(projectId, defaultAgentSdk)
+  if (!model) return
+
+  try {
+    await window.db.worktree.updateModel({
+      worktreeId,
+      modelProviderId: model.providerID,
+      modelId: model.modelID,
+      modelVariant: model.variant ?? null
+    })
+    useWorktreeStore.getState().updateWorktreeModel(worktreeId, model)
+  } catch {
+    // Best-effort seed for project defaults on new worktrees
+  }
 }
 
 // Worktree type matching the database schema
@@ -233,6 +255,7 @@ export const useWorktreeStore = create<WorktreeState>((set, get) => ({
       })
 
       // Fire-and-forget: run setup script if configured
+      void applyProjectModelToWorktree(result.worktree!.id, projectId)
       fireSetupScript(projectId, result.worktree!.id, result.worktree!.path)
 
       return { success: true }
@@ -556,6 +579,7 @@ export const useWorktreeStore = create<WorktreeState>((set, get) => ({
         get().loadWorktrees(projectId)
 
         // Fire-and-forget: run setup script if configured
+        void applyProjectModelToWorktree(result.worktree!.id, projectId)
         fireSetupScript(projectId, result.worktree!.id, result.worktree!.path)
       }
       return result
