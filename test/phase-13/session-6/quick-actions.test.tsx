@@ -37,9 +37,11 @@ vi.mock('@/stores/useWorktreeStore', () => ({
 
 // Mock settings store state - use let so tests can override
 let mockSettingsStoreState: {
+  defaultEditor: string
   defaultTerminal: string
   customTerminalCommand: string
 } = {
+  defaultEditor: 'cursor',
   defaultTerminal: 'ghostty',
   customTerminalCommand: ''
 }
@@ -59,6 +61,7 @@ const mockCopyToClipboard = vi.fn().mockResolvedValue(undefined)
 const mockShowInFolder = vi.fn().mockResolvedValue(undefined)
 const mockOpenInApp = vi.fn().mockResolvedValue({ success: true })
 const mockOpenWithTerminal = vi.fn().mockResolvedValue({ success: true })
+const mockOpenInEditor = vi.fn().mockResolvedValue({ success: true })
 
 Object.defineProperty(window, 'projectOps', {
   writable: true,
@@ -79,6 +82,13 @@ Object.defineProperty(window, 'settingsOps', {
   writable: true,
   value: {
     openWithTerminal: mockOpenWithTerminal
+  }
+})
+
+Object.defineProperty(window, 'worktreeOps', {
+  writable: true,
+  value: {
+    openInEditor: mockOpenInEditor
   }
 })
 
@@ -108,6 +118,7 @@ describe('Session 6: Quick Action Buttons', () => {
     }
     // Reset settings to defaults
     mockSettingsStoreState = {
+      defaultEditor: 'cursor',
       defaultTerminal: 'ghostty',
       customTerminalCommand: ''
     }
@@ -115,7 +126,7 @@ describe('Session 6: Quick Action Buttons', () => {
 
   test('renders four individual buttons', () => {
     render(<QuickActions />)
-    expect(screen.getByTestId('quick-action-cursor')).toBeInTheDocument()
+    expect(screen.getByTestId('quick-action-editor')).toBeInTheDocument()
     expect(screen.getByTestId('quick-action-terminal')).toBeInTheDocument()
     expect(screen.getByTestId('quick-action-copy-path')).toBeInTheDocument()
     expect(screen.getByTestId('quick-action-finder')).toBeInTheDocument()
@@ -129,6 +140,26 @@ describe('Session 6: Quick Action Buttons', () => {
   test('Cursor button shows label', () => {
     render(<QuickActions />)
     expect(screen.getByText('Cursor')).toBeInTheDocument()
+  })
+
+  test('Editor button shows IntelliJ IDEA when configured', () => {
+    mockSettingsStoreState = {
+      defaultEditor: 'idea',
+      defaultTerminal: 'ghostty',
+      customTerminalCommand: ''
+    }
+    render(<QuickActions />)
+    expect(screen.getByText('IntelliJ IDEA')).toBeInTheDocument()
+  })
+
+  test('Editor button shows Antigravity when configured', () => {
+    mockSettingsStoreState = {
+      defaultEditor: 'antigravity',
+      defaultTerminal: 'ghostty',
+      customTerminalCommand: ''
+    }
+    render(<QuickActions />)
+    expect(screen.getByText('Antigravity')).toBeInTheDocument()
   })
 
   test('Terminal button shows label based on defaultTerminal setting', () => {
@@ -148,8 +179,9 @@ describe('Session 6: Quick Action Buttons', () => {
   test('Cursor button calls openInApp with cursor', async () => {
     const user = userEvent.setup()
     render(<QuickActions />)
-    await user.click(screen.getByTestId('quick-action-cursor'))
-    expect(mockOpenInApp).toHaveBeenCalledWith('cursor', '/Users/test/my-project')
+    await user.click(screen.getByTestId('quick-action-editor'))
+    expect(mockOpenInEditor).toHaveBeenCalledWith('/Users/test/my-project')
+    expect(mockOpenInApp).not.toHaveBeenCalled()
   })
 
   test('Terminal button calls openWithTerminal with configured terminal', async () => {
@@ -199,7 +231,7 @@ describe('Session 6: Quick Action Buttons', () => {
     }
 
     render(<QuickActions />)
-    expect(screen.getByTestId('quick-action-cursor')).toBeDisabled()
+    expect(screen.getByTestId('quick-action-editor')).toBeDisabled()
     expect(screen.getByTestId('quick-action-terminal')).toBeDisabled()
     expect(screen.getByTestId('quick-action-copy-path')).toBeDisabled()
     expect(screen.getByTestId('quick-action-finder')).toBeDisabled()

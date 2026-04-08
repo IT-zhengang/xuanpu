@@ -207,6 +207,8 @@ describe('Operation Resolvers — Integration Tests', () => {
       // Should include well-known editors
       const ids = data.detectedEditors.map((e: any) => e.id)
       expect(ids).toContain('vscode')
+      expect(ids).toContain('idea')
+      expect(ids).toContain('antigravity')
     })
 
     it('detectedTerminals returns an array of apps', async () => {

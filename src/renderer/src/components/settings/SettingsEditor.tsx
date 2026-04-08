@@ -24,6 +24,8 @@ export function SettingsEditor(): React.JSX.Element {
     { id: 'cursor', label: 'Cursor' },
     { id: 'sublime', label: 'Sublime Text' },
     { id: 'webstorm', label: 'WebStorm' },
+    { id: 'idea', label: 'IntelliJ IDEA' },
+    { id: 'antigravity', label: 'Antigravity' },
     { id: 'zed', label: 'Zed' },
     { id: 'custom', label: t('settings.editor.customCommand.optionLabel') }
   ]

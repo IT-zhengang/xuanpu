@@ -26,7 +26,15 @@ export function migrateSettingsShape(raw: Record<string, any>): Record<string, a
 // Types
 // ==========================================
 
-export type EditorOption = 'vscode' | 'cursor' | 'sublime' | 'webstorm' | 'zed' | 'custom'
+export type EditorOption =
+  | 'vscode'
+  | 'cursor'
+  | 'sublime'
+  | 'webstorm'
+  | 'idea'
+  | 'antigravity'
+  | 'zed'
+  | 'custom'
 export type TerminalOption =
   | 'terminal'
   | 'iterm'

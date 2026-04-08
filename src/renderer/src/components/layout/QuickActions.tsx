@@ -275,6 +275,8 @@ const EDITOR_LABELS: Record<EditorOption, string> = {
   cursor: 'Cursor',
   sublime: 'Sublime',
   webstorm: 'WebStorm',
+  idea: 'IntelliJ IDEA',
+  antigravity: 'Antigravity',
   zed: 'Zed',
   custom: 'Editor'
 }

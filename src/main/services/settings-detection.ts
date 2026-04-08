@@ -9,14 +9,23 @@ export interface DetectedApp {
   available: boolean
 }
 
+interface AppDefinition {
+  id: string
+  name: string
+  commands: string[]
+  appPaths?: string[]
+}
+
 export function detectEditors(): DetectedApp[] {
   const currentPlatform = platform()
   const editors: DetectedApp[] = []
 
-  const editorDefs = [
+  const editorDefs: AppDefinition[] = [
     {
       id: 'vscode',
       name: 'Visual Studio Code',
+      appPaths:
+        currentPlatform === 'darwin' ? ['/Applications/Visual Studio Code.app'] : undefined,
       commands:
         currentPlatform === 'darwin'
           ? [
@@ -30,6 +39,7 @@ export function detectEditors(): DetectedApp[] {
     {
       id: 'cursor',
       name: 'Cursor',
+      appPaths: currentPlatform === 'darwin' ? ['/Applications/Cursor.app'] : undefined,
       commands:
         currentPlatform === 'darwin'
           ? ['/usr/local/bin/cursor', '/Applications/Cursor.app/Contents/Resources/app/bin/cursor']
@@ -40,6 +50,7 @@ export function detectEditors(): DetectedApp[] {
     {
       id: 'sublime',
       name: 'Sublime Text',
+      appPaths: currentPlatform === 'darwin' ? ['/Applications/Sublime Text.app'] : undefined,
       commands:
         currentPlatform === 'darwin'
           ? [
@@ -53,6 +64,7 @@ export function detectEditors(): DetectedApp[] {
     {
       id: 'webstorm',
       name: 'WebStorm',
+      appPaths: currentPlatform === 'darwin' ? ['/Applications/WebStorm.app'] : undefined,
       commands:
         currentPlatform === 'darwin'
           ? ['/usr/local/bin/webstorm', '/Applications/WebStorm.app/Contents/MacOS/webstorm']
@@ -61,8 +73,44 @@ export function detectEditors(): DetectedApp[] {
             : ['webstorm']
     },
     {
+      id: 'idea',
+      name: 'IntelliJ IDEA',
+      appPaths:
+        currentPlatform === 'darwin'
+          ? ['/Applications/IntelliJ IDEA.app', '/Applications/IntelliJ IDEA CE.app']
+          : undefined,
+      commands:
+        currentPlatform === 'darwin'
+          ? [
+              '/usr/local/bin/idea',
+              '/opt/homebrew/bin/idea',
+              '/Applications/IntelliJ IDEA.app/Contents/MacOS/idea',
+              '/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea'
+            ]
+          : currentPlatform === 'win32'
+            ? ['idea64.exe', 'idea.exe', 'idea.cmd']
+            : ['idea', 'idea-community', 'idea-ultimate', 'intellij-idea-community']
+    },
+    {
+      id: 'antigravity',
+      name: 'Antigravity',
+      appPaths: currentPlatform === 'darwin' ? ['/Applications/Antigravity.app'] : undefined,
+      commands:
+        currentPlatform === 'darwin'
+          ? [
+              '/usr/local/bin/agy',
+              '/opt/homebrew/bin/agy',
+              '/Applications/Antigravity.app/Contents/MacOS/Antigravity',
+              '/Applications/Antigravity.app/Contents/Resources/app/bin/agy'
+            ]
+          : currentPlatform === 'win32'
+            ? ['agy.cmd', 'antigravity.cmd', 'agy.exe', 'antigravity.exe', 'agy']
+            : ['agy', 'antigravity']
+    },
+    {
       id: 'zed',
       name: 'Zed',
+      appPaths: currentPlatform === 'darwin' ? ['/Applications/Zed.app'] : undefined,
       commands:
         currentPlatform === 'darwin'
           ? ['/usr/local/bin/zed', '/Applications/Zed.app/Contents/MacOS/zed']
@@ -75,6 +123,10 @@ export function detectEditors(): DetectedApp[] {
   for (const def of editorDefs) {
     let available = false
     let resolvedCommand = ''
+
+    if (currentPlatform === 'darwin' && def.appPaths?.some((appPath) => existsSync(appPath))) {
+      available = true
+    }
 
     for (const cmd of def.commands) {
       if (existsSync(cmd)) {

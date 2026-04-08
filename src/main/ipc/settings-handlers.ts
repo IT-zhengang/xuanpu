@@ -25,6 +25,61 @@ function resolveEditorCommand(
   return { command: editor.command }
 }
 
+function launchEditor(
+  targetPath: string,
+  editorId: string,
+  customCommand?: string
+): { success: true } | { success: false; error: string } {
+  const currentPlatform = platform()
+
+  try {
+    if (editorId === 'custom') {
+      if (!customCommand) {
+        return { success: false, error: 'Custom editor command is empty' }
+      }
+      const child = spawn(customCommand, [targetPath], { detached: true, stdio: 'ignore' })
+      child.unref()
+      return { success: true }
+    }
+
+    if (currentPlatform === 'darwin') {
+      const macAppNames: Record<string, string> = {
+        vscode: 'Visual Studio Code',
+        cursor: 'Cursor',
+        sublime: 'Sublime Text',
+        webstorm: 'WebStorm',
+        idea: 'IntelliJ IDEA',
+        antigravity: 'Antigravity',
+        zed: 'Zed'
+      }
+
+      const appName = macAppNames[editorId]
+      if (appName) {
+        const child = spawn('open', ['-a', appName, targetPath], {
+          detached: true,
+          stdio: 'ignore'
+        })
+        child.unref()
+        return { success: true }
+      }
+    }
+
+    const resolved = resolveEditorCommand(editorId, customCommand)
+    if ('error' in resolved) {
+      return { success: false, error: resolved.error }
+    }
+
+    const child = spawn(resolved.command, [targetPath], { detached: true, stdio: 'ignore' })
+    child.unref()
+    return { success: true }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
 /**
  * Open a path with the user's preferred editor (reads defaultEditor and customEditorCommand from DB).
  * Used by worktree, connection, and git "Open in Editor" handlers.
@@ -51,13 +106,7 @@ export function openPathWithPreferredEditor(
   if ('error' in resolved) {
     return Promise.resolve({ success: false, error: resolved.error })
   }
-  try {
-    spawn(resolved.command, [path], { detached: true, stdio: 'ignore' })
-    return Promise.resolve({ success: true })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error'
-    return Promise.resolve({ success: false, error: message })
-  }
+  return Promise.resolve(launchEditor(path, editorId, customCommand || undefined))
 }
 
 export function registerSettingsHandlers(): void {
@@ -102,12 +151,8 @@ export function registerSettingsHandlers(): void {
         if (!existsSync(worktreePath)) {
           return { success: false, error: 'Path does not exist' }
         }
-        const resolved = resolveEditorCommand(editorId, customCommand)
-        if ('error' in resolved) {
-          return { success: false, error: resolved.error }
-        }
-
-        spawn(resolved.command, [worktreePath], { detached: true, stdio: 'ignore' })
+        const result = launchEditor(worktreePath, editorId, customCommand)
+        if (!result.success) return result
         telemetryService.track('worktree_opened_in_editor')
         return { success: true }
       } catch (error) {
