@@ -45,15 +45,41 @@ if $SLEEP_AFTER; then
 fi
 
 # ── Constants ─────────────────────────────────────────────────────
-REPO="slicenferqin/xuanpu"
-GIT_REMOTE="${GIT_REMOTE:-xuanpu}"
+OFFICIAL_REPO="slicenferqin/xuanpu"
+GIT_REMOTE="${GIT_REMOTE:-origin}"
+detect_git_repo() {
+  local remote_name="$1"
+  local remote_url
+
+  remote_url=$(git remote get-url "$remote_name" 2>/dev/null || true)
+  if [[ -z "$remote_url" ]]; then
+    return 1
+  fi
+
+  remote_url="${remote_url%.git}"
+  remote_url="${remote_url#git@github.com:}"
+  remote_url="${remote_url#ssh://git@github.com/}"
+  remote_url="${remote_url#https://github.com/}"
+  remote_url="${remote_url#http://github.com/}"
+
+  if [[ "$remote_url" =~ ^[^/]+/[^/]+$ ]]; then
+    echo "$remote_url"
+    return 0
+  fi
+
+  return 1
+}
+REPO="${REPO:-${GITHUB_REPOSITORY:-$(detect_git_repo "$GIT_REMOTE" || echo "$OFFICIAL_REPO")}}"
+REPO_OWNER="${REPO%%/*}"
+REPO_NAME="${REPO##*/}"
 GHOSTTY_DEPS_TAG="ghostty-deps-v1"
-GHOSTTY_DEPS_REPO="${GHOSTTY_DEPS_REPO:-$REPO}"
+GHOSTTY_DEPS_REPO="${GHOSTTY_DEPS_REPO:-$OFFICIAL_REPO}"
 HOMEBREW_REPO="${HOMEBREW_REPO:-$HOME/Documents/dev/xuanpu-brew}"
 HOMEBREW_REMOTE="${HOMEBREW_REMOTE:-origin}"
-HOMEBREW_TAP="${HOMEBREW_TAP:-slicenferqin/xuanpu}"
+HOMEBREW_TAP="${HOMEBREW_TAP:-$REPO}"
 HOMEBREW_CASK_NAME="${HOMEBREW_CASK_NAME:-xuanpu}"
 HOMEBREW_CASK="Casks/${HOMEBREW_CASK_NAME}.rb"
+SKIP_HOMEBREW_UPDATE="${SKIP_HOMEBREW_UPDATE:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -66,6 +92,7 @@ DIST_DIR="$PROJECT_DIR/dist"
 # Check gh CLI is authenticated
 gh auth status &>/dev/null || fatal "gh CLI is not authenticated. Run 'gh auth login' first."
 ok "gh CLI authenticated"
+ok "Target GitHub repo: ${REPO}"
 
 # Check clean working tree
 if ! git diff --quiet || ! git diff --cached --quiet; then
@@ -368,7 +395,11 @@ info "This will take several minutes (notarization is slow)."
 export GH_TOKEN
 GH_TOKEN=$(gh auth token)
 
-pnpm exec electron-builder --mac --publish always
+pnpm exec electron-builder \
+  --mac \
+  --publish always \
+  --config.publish.owner="$REPO_OWNER" \
+  --config.publish.repo="$REPO_NAME"
 
 ok "Assets uploaded to GitHub Releases"
 
@@ -386,7 +417,12 @@ if bash "$SCRIPT_DIR/prepare-win-deps.sh"; then
   info "Packaging Windows build..."
   info "This may take a few minutes."
   # --config.npmRebuild=false: skip native module rebuild (we prepared Windows binaries manually)
-  if pnpm exec electron-builder --win --publish always --config.npmRebuild=false; then
+  if pnpm exec electron-builder \
+    --win \
+    --publish always \
+    --config.npmRebuild=false \
+    --config.publish.owner="$REPO_OWNER" \
+    --config.publish.repo="$REPO_NAME"; then
     WIN_BUILD_OK=true
     ok "Windows assets uploaded to GitHub Releases"
 
@@ -422,6 +458,9 @@ info "Release URL: https://github.com/${REPO}/releases/tag/v${NEW_VERSION}"
 # ── Phase 5: Update Homebrew cask ─────────────────────────────────
 info "Updating Homebrew cask..."
 
+if [[ "$SKIP_HOMEBREW_UPDATE" == "true" ]]; then
+  warn "Skipping Homebrew cask update (SKIP_HOMEBREW_UPDATE=true)"
+else
 if [[ ! -d "$HOMEBREW_REPO/.git" ]]; then
   fatal "Homebrew repo not found at $HOMEBREW_REPO"
 fi
@@ -474,6 +513,7 @@ git push "$HOMEBREW_REMOTE" main
 cd "$PROJECT_DIR"
 
 ok "Homebrew repo pushed"
+fi
 
 # ── Phase 6: Summary ─────────────────────────────────────────────
 echo ""
