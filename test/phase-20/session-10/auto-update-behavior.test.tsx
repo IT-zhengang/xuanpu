@@ -32,9 +32,7 @@ type UpdateDownloadedData = { version: string; releaseNotes?: string }
 type UpdateErrorData = { message: string }
 
 let onUpdateAvailableCb: ((data: UpdateAvailableData) => void) | null = null
-let onProgressCb: ((data: DownloadProgressData) => void) | null = null
 let onUpdateDownloadedCb: ((data: UpdateDownloadedData) => void) | null = null
-let onErrorCb: ((data: UpdateErrorData) => void) | null = null
 
 const installUpdateMock = vi.fn().mockResolvedValue(undefined)
 
@@ -43,9 +41,7 @@ describe('Auto update behavior', () => {
     vi.clearAllMocks()
 
     onUpdateAvailableCb = null
-    onProgressCb = null
     onUpdateDownloadedCb = null
-    onErrorCb = null
 
     toastMocks.info.mockReturnValue('toast-available')
     toastMocks.loading.mockReturnValue('toast-progress')
@@ -67,10 +63,8 @@ describe('Auto update behavior', () => {
         }),
         onUpdateNotAvailable: vi.fn().mockReturnValue(() => {}),
         onProgress: vi.fn((cb: (data: DownloadProgressData) => void) => {
-          onProgressCb = cb
-          return () => {
-            onProgressCb = null
-          }
+          void cb
+          return () => {}
         }),
         onUpdateDownloaded: vi.fn((cb: (data: UpdateDownloadedData) => void) => {
           onUpdateDownloadedCb = cb
@@ -79,10 +73,8 @@ describe('Auto update behavior', () => {
           }
         }),
         onError: vi.fn((cb: (data: UpdateErrorData) => void) => {
-          onErrorCb = cb
-          return () => {
-            onErrorCb = null
-          }
+          void cb
+          return () => {}
         })
       }
     })

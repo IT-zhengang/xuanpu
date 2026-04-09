@@ -39,6 +39,8 @@ export function CodeMirrorEditor({
 }: CodeMirrorEditorProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const initialContentRef = useRef(content)
+  const initialFilePathRef = useRef(filePath)
   const onContentChangeRef = useRef(onContentChange)
   onContentChangeRef.current = onContentChange
   const onSaveRef = useRef(onSave)
@@ -54,7 +56,7 @@ export function CodeMirrorEditor({
     if (!containerRef.current) return
 
     const state = EditorState.create({
-      doc: content,
+      doc: initialContentRef.current,
       extensions: [
         oneDark,
         editorTheme,
@@ -76,7 +78,7 @@ export function CodeMirrorEditor({
           ...searchKeymap,
           indentWithTab
         ]),
-        getLanguageExtension(filePath),
+        getLanguageExtension(initialFilePathRef.current),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && onContentChangeRef.current) {
             onContentChangeRef.current(update.state.doc.toString())

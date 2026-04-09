@@ -344,7 +344,7 @@ export function registerOpenCodeHandlers(
     async (
       _event,
       {
-        worktreePath,
+        worktreePath: _worktreePath,
         modelId,
         agentSdk
       }: { worktreePath: string; modelId: string; agentSdk?: 'opencode' | 'claude-code' | 'codex' }
@@ -451,7 +451,7 @@ export function registerOpenCodeHandlers(
     async (
       _event,
       {
-        worktreePath,
+        worktreePath: _worktreePath,
         sessionId,
         command,
         args,
@@ -656,7 +656,7 @@ export function registerOpenCodeHandlers(
     async (
       _event,
       {
-        worktreePath,
+        worktreePath: _worktreePath,
         hiveSessionId,
         requestId
       }: { worktreePath: string; hiveSessionId: string; requestId?: string }
@@ -811,7 +811,7 @@ export function registerOpenCodeHandlers(
         approved,
         remember,
         pattern,
-        worktreePath,
+        worktreePath: _worktreePath,
         patterns
       }: {
         requestId: string

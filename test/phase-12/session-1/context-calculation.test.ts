@@ -4,7 +4,8 @@ import { useContextStore } from '../../../src/renderer/src/stores/useContextStor
 import {
   extractTokens,
   extractCost,
-  extractModelRef
+  extractModelRef,
+  extractModelUsage
 } from '../../../src/renderer/src/lib/token-utils'
 
 beforeEach(() => {
@@ -93,6 +94,67 @@ describe('Session 1: Context Calculation Fix', () => {
 
       expect(useContextStore.getState().tokensBySession['s1']).toBeUndefined()
       expect(useContextStore.getState().costBySession['s1']).toBeUndefined()
+    })
+
+    test('clearSessionTokenSnapshot clears tokens and model but preserves cost', () => {
+      const store = useContextStore.getState()
+      act(() => {
+        store.setSessionTokens(
+          's1',
+          {
+            input: 100,
+            output: 50,
+            reasoning: 0,
+            cacheRead: 0,
+            cacheWrite: 0
+          },
+          {
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet-4-5-20250929'
+          }
+        )
+        store.setSessionCost('s1', 0.01)
+      })
+
+      act(() => {
+        store.clearSessionTokenSnapshot('s1')
+      })
+
+      expect(useContextStore.getState().tokensBySession['s1']).toBeUndefined()
+      expect(useContextStore.getState().modelBySession['s1']).toBeUndefined()
+      expect(useContextStore.getState().costBySession['s1']).toBe(0.01)
+    })
+
+    test('setSessionTokens without model clears stale model identity', () => {
+      const store = useContextStore.getState()
+      act(() => {
+        store.setSessionTokens(
+          's1',
+          {
+            input: 10,
+            output: 5,
+            reasoning: 0,
+            cacheRead: 0,
+            cacheWrite: 0
+          },
+          {
+            providerID: 'openai',
+            modelID: 'gpt-5.4'
+          }
+        )
+      })
+
+      act(() => {
+        store.setSessionTokens('s1', {
+          input: 20,
+          output: 6,
+          reasoning: 0,
+          cacheRead: 0,
+          cacheWrite: 0
+        })
+      })
+
+      expect(useContextStore.getState().modelBySession['s1']).toBeUndefined()
     })
 
     test('addSessionCost initializes from zero for new session', () => {
@@ -399,6 +461,34 @@ describe('Session 1: Context Calculation Fix', () => {
         providerID: 'anthropic',
         modelID: 'claude-sonnet-4-5-20250929'
       })
+    })
+  })
+
+  describe('extractModelUsage', () => {
+    test('keeps provider identity for provider-scoped model limits', () => {
+      const result = extractModelUsage({
+        providerID: 'openai',
+        modelUsage: {
+          'gpt-5.4': {
+            inputTokens: 100,
+            outputTokens: 50,
+            contextWindow: 258400
+          }
+        }
+      })
+
+      expect(result).toEqual([
+        {
+          modelID: 'gpt-5.4',
+          providerID: 'openai',
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          costUSD: 0,
+          contextWindow: 258400
+        }
+      ])
     })
   })
 })

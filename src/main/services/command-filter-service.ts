@@ -62,7 +62,6 @@ export class CommandFilterService {
     let commandSubDepth = 0  // Tracks $(...) nesting depth
     let inHeredoc = false
     let heredocDelimiter = ''
-    let heredocIndented = false  // For <<- style heredocs
 
     // Stack to track quote state at each command substitution level
     // When we enter $(, we push current quote state and start fresh
@@ -83,8 +82,6 @@ export class CommandFilterService {
 
           // Extract the delimiter
           let delimEnd = heredocStart
-          let quoted = false
-
           // Skip whitespace
           while (delimEnd < command.length && /\s/.test(command[delimEnd])) {
             delimEnd++
@@ -92,7 +89,6 @@ export class CommandFilterService {
 
           // Check if delimiter is quoted
           if (command[delimEnd] === "'" || command[delimEnd] === '"') {
-            quoted = true
             const quoteChar = command[delimEnd]
             delimEnd++
             const delimStart = delimEnd
@@ -115,7 +111,6 @@ export class CommandFilterService {
 
           if (heredocDelimiter) {
             inHeredoc = true
-            heredocIndented = isIndented
             // Add the heredoc start to current command
             current += command.slice(i, delimEnd)
             i = delimEnd
@@ -150,7 +145,6 @@ export class CommandFilterService {
               // Add only the delimiter to current (newline was already added in previous iteration)
               current += command.slice(i, delimiterEnd)
               heredocDelimiter = ''
-              heredocIndented = false
               i = delimiterEnd
               continue
             }

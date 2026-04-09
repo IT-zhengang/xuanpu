@@ -371,6 +371,7 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
     hiveSessionId: string
   ): Promise<{
     success: boolean
+    sessionId?: string
     sessionStatus?: 'idle' | 'busy' | 'retry'
     revertMessageID?: string | null
   }> {
@@ -387,7 +388,12 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
         hiveSessionId,
         sessionStatus
       })
-      return { success: true, sessionStatus, revertMessageID: null }
+      return {
+        success: true,
+        sessionId: agentSessionId,
+        sessionStatus,
+        revertMessageID: null
+      }
     }
 
     // Otherwise, start a new session with thread resume
@@ -431,6 +437,7 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
 
       return {
         success: true,
+        sessionId: threadId,
         sessionStatus: this.statusToHive(state.status),
         revertMessageID: null
       }
@@ -567,6 +574,8 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
     let turnCompleted = false
     let turnFailed = false
     let completedTurnId: string | undefined
+    let completedTurnUsage: Record<string, unknown> | undefined
+    let completedTurnCost: number | undefined
 
     const handleEvent = (event: CodexManagerEvent) => {
       // Only handle events for this thread
@@ -632,10 +641,15 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
       // Detect turn completion and whether it failed
       if (event.method === 'turn/completed') {
         turnCompleted = true
+        const payloadRecord = asObject(event.payload)
+        const turnRecord = asObject(payloadRecord?.turn)
         const payload = event.payload as Record<string, unknown> | undefined
         const turnObj = payload?.turn as Record<string, unknown> | undefined
         completedTurnId =
           event.turnId ?? (typeof turnObj?.id === 'string' ? (turnObj.id as string) : undefined)
+        completedTurnUsage =
+          asObject(turnRecord?.usage) ?? asObject(payloadRecord?.usage) ?? completedTurnUsage
+        completedTurnCost = asNumber(turnRecord?.cost) ?? asNumber(payloadRecord?.cost) ?? completedTurnCost
         const status = (turnObj?.status as string) ?? (payload?.state as string)
         if (status === 'failed') {
           turnFailed = true
@@ -674,7 +688,13 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
       // Read canonical thread for properly separated messages
       try {
         const threadSnapshot = await this.manager.readThread(session.threadId)
-        const parsed = this.parseThreadSnapshot(threadSnapshot)
+        const parsed = this.attachCompletionMetadata(
+          this.parseThreadSnapshot(threadSnapshot),
+          completedTurnId,
+          model,
+          completedTurnUsage,
+          completedTurnCost
+        )
         if (parsed.length > 0) {
           session.messages = parsed
         }
@@ -703,8 +723,12 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
         }
         if (assistantParts.length > 0) {
           session.messages.push({
+            ...(completedTurnId ? { id: `${completedTurnId}:assistant` } : {}),
             role: 'assistant',
             parts: assistantParts,
+            ...(completedTurnUsage ? { usage: completedTurnUsage } : {}),
+            ...(typeof completedTurnCost === 'number' ? { cost: completedTurnCost } : {}),
+            model: { providerID: 'codex', modelID: model },
             timestamp: new Date().toISOString()
           })
         }
@@ -2233,5 +2257,28 @@ export class CodexImplementer implements AgentSdkImplementer, AgentRuntimeAdapte
         return a.order - b.order
       })
       .map((entry) => entry.message)
+  }
+
+  private attachCompletionMetadata(
+    messages: unknown[],
+    turnId: string | undefined,
+    modelID: string,
+    usage: Record<string, unknown> | undefined,
+    cost: number | undefined
+  ): unknown[] {
+    if (!turnId || (!usage && cost === undefined)) return messages
+
+    return messages.map((message) => {
+      const record = asObject(message)
+      if (!record) return message
+      if (record.id !== `${turnId}:assistant`) return message
+
+      return {
+        ...record,
+        ...(usage ? { usage } : {}),
+        ...(cost !== undefined ? { cost } : {}),
+        model: { providerID: 'codex', modelID }
+      }
+    })
   }
 }

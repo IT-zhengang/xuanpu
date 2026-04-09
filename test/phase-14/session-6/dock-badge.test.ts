@@ -11,7 +11,7 @@ vi.mock('electron', () => ({
     static isSupported() {
       return notificationsSupported
     }
-    constructor(_opts: Record<string, unknown>) {} // eslint-disable-line @typescript-eslint/no-empty-function
+    constructor(_opts: Record<string, unknown>) {}
     on = mockNotificationOn
     show = mockNotificationShow
   },

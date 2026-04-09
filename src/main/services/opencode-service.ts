@@ -461,6 +461,7 @@ class OpenCodeService implements AgentSdkImplementer, AgentRuntimeAdapter {
     hiveSessionId: string
   ): Promise<{
     success: boolean
+    sessionId?: string
     sessionStatus?: 'idle' | 'busy' | 'retry'
     revertMessageID?: string | null
   }> {
@@ -495,7 +496,7 @@ class OpenCodeService implements AgentSdkImplementer, AgentRuntimeAdapter {
         })
         const revert = asRecord(asRecord(sessionResult.data)?.revert)
         const revertMessageID = asString(revert?.messageID) ?? null
-        return { success: true, sessionStatus, revertMessageID }
+        return { success: true, sessionId: opencodeSessionId, sessionStatus, revertMessageID }
       }
 
       // Try to get the session
@@ -523,7 +524,7 @@ class OpenCodeService implements AgentSdkImplementer, AgentRuntimeAdapter {
           sessionStatus,
           revertMessageID
         })
-        return { success: true, sessionStatus, revertMessageID }
+        return { success: true, sessionId: opencodeSessionId, sessionStatus, revertMessageID }
       }
     } catch (error) {
       log.warn('Failed to reconnect to OpenCode session', { opencodeSessionId, error })

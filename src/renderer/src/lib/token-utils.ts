@@ -1,6 +1,7 @@
 import type { SessionModelRef, TokenInfo } from '@/stores/useContextStore'
 import {
   extractUsageCost,
+  extractUsageMessageID,
   extractUsageModelRef,
   extractUsageTokens
 } from '@shared/usage/message'
@@ -57,6 +58,10 @@ export function extractCost(messageData: Record<string, unknown>): number {
   return extractUsageCost(messageData)
 }
 
+export function extractMessageUsageId(messageData: Record<string, unknown>): string | null {
+  return extractUsageMessageID(messageData)
+}
+
 export function extractModelRef(messageData: Record<string, unknown>): SessionModelRef | null {
   const modelRef = extractUsageModelRef(messageData)
   if (!modelRef?.providerID) return null
@@ -64,7 +69,8 @@ export function extractModelRef(messageData: Record<string, unknown>): SessionMo
 }
 
 export interface ModelUsageEntry {
-  modelName: string
+  modelID: string
+  providerID?: string
   inputTokens: number
   outputTokens: number
   cacheReadInputTokens: number
@@ -75,7 +81,7 @@ export interface ModelUsageEntry {
 
 /**
  * Extract per-model usage from result message's modelUsage field.
- * The SDK result message includes a `modelUsage` map keyed by model name,
+ * The SDK result message includes a `modelUsage` map keyed by model id,
  * each with token counts and `contextWindow` (the model's context limit).
  * Returns null if no modelUsage is present.
  */
@@ -84,12 +90,25 @@ export function extractModelUsage(messageData: Record<string, unknown>): ModelUs
   const modelUsage = asRecord(messageData.modelUsage ?? info?.modelUsage)
   if (!modelUsage) return null
 
+  const selectedModel = extractSelectedModel(messageData)
+  const defaultProviderID =
+    selectedModel?.providerID ??
+    (typeof messageData.providerID === 'string'
+      ? messageData.providerID
+      : typeof info?.providerID === 'string'
+        ? info.providerID
+        : undefined)
+
   const entries: ModelUsageEntry[] = []
-  for (const [modelName, value] of Object.entries(modelUsage)) {
+  for (const [modelID, value] of Object.entries(modelUsage)) {
     const usage = asRecord(value)
     if (!usage) continue
     entries.push({
-      modelName,
+      modelID,
+      providerID:
+        typeof usage.providerID === 'string'
+          ? usage.providerID
+          : defaultProviderID,
       inputTokens: toNumber(usage.inputTokens),
       outputTokens: toNumber(usage.outputTokens),
       cacheReadInputTokens: toNumber(usage.cacheReadInputTokens),

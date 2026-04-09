@@ -198,6 +198,7 @@ describe('CodexImplementer lifecycle', () => {
       const result = await impl.reconnect('/test', 'thread-existing', 'new-hive-id')
 
       expect(result.success).toBe(true)
+      expect(result.sessionId).toBe('thread-existing')
       expect(result.sessionStatus).toBe('idle')
 
       // Verify hiveSessionId was updated
@@ -218,6 +219,7 @@ describe('CodexImplementer lifecycle', () => {
       const result = await impl.reconnect('/test', 'thread-running', 'hive-2')
 
       expect(result.success).toBe(true)
+      expect(result.sessionId).toBe('thread-running')
       expect(result.sessionStatus).toBe('busy')
     })
 
@@ -237,6 +239,7 @@ describe('CodexImplementer lifecycle', () => {
       const result = await impl.reconnect('/test', 'thread-old', 'hive-new')
 
       expect(result.success).toBe(true)
+      expect(result.sessionId).toBe('thread-reconnected')
       expect(result.sessionStatus).toBe('idle')
 
       // Verify manager was called with resume

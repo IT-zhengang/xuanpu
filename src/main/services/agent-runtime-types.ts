@@ -29,6 +29,7 @@ export interface AgentRuntimeAdapter {
     hiveSessionId: string
   ): Promise<{
     success: boolean
+    sessionId?: string
     sessionStatus?: 'idle' | 'busy' | 'retry'
     revertMessageID?: string | null
   }>

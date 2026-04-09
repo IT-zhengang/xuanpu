@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, renderHook } from '@testing-library/react'
-import { useOpenCodeGlobalListener } from '@/hooks/useOpenCodeGlobalListener'
+import { useAgentGlobalListener } from '@/hooks/useAgentGlobalListener'
 
 let streamCallback: ((event: Record<string, unknown>) => void) | null = null
 
@@ -27,7 +27,7 @@ const mockDbSessionGet = vi.fn()
 const mockDbWorktreeGet = vi.fn()
 const mockConnectionGet = vi.fn()
 
-Object.defineProperty(window, 'opencodeOps', {
+Object.defineProperty(window, 'agentOps', {
   writable: true,
   value: {
     onStream: mockOnStream,
@@ -149,6 +149,24 @@ vi.mock('@/stores/useQuestionStore', () => ({
   }
 }))
 
+vi.mock('@/stores/useSettingsStore', () => ({
+  useSettingsStore: {
+    getState: () => ({
+      showUsageIndicator: false
+    })
+  }
+}))
+
+vi.mock('@/stores', () => ({
+  useUsageStore: {
+    getState: () => ({
+      fetchUsageForProvider: vi.fn(),
+      fetchUsage: vi.fn()
+    })
+  },
+  resolveUsageProvider: vi.fn(() => 'all')
+}))
+
 vi.mock('@/stores/usePermissionStore', () => ({
   usePermissionStore: {
     getState: () => ({
@@ -212,7 +230,7 @@ describe('Global listener background follow-up dispatcher', () => {
   })
 
   function mountAndGetCallback() {
-    renderHook(() => useOpenCodeGlobalListener())
+    renderHook(() => useAgentGlobalListener())
     expect(streamCallback).not.toBeNull()
     return streamCallback!
   }

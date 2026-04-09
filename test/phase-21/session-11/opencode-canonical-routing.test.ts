@@ -60,12 +60,11 @@ function createMockDbService(): DatabaseService {
 describe('OpenCode Canonical Protocol Routing', () => {
   let manager: AgentRuntimeManager
   let mockOC: AgentRuntimeAdapter
-  let mockDb: DatabaseService
 
   beforeEach(() => {
     mockOC = createMockOpenCodeImpl()
     manager = new AgentRuntimeManager([mockOC])
-    mockDb = createMockDbService()
+    createMockDbService()
   })
 
   it('should route agent:connect to OpenCode implementer', async () => {

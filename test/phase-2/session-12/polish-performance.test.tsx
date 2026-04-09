@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
 import { ErrorBoundary } from '../../../src/renderer/src/components/error/ErrorBoundary'
 import { GitStatusPanel } from '../../../src/renderer/src/components/git/GitStatusPanel'

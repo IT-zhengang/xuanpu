@@ -210,4 +210,51 @@ describe('SessionView runtime switch continuity', () => {
       opencode_session_id: 'opc-session-2'
     })
   })
+
+  it('adopts a new runtime session id returned by reconnect and persists it', async () => {
+    const reconnectMock = vi.fn().mockResolvedValue({
+      success: true,
+      sessionId: 'opc-session-2',
+      sessionStatus: 'idle'
+    })
+    const getMessagesMock = vi.fn().mockResolvedValue({ success: true, messages: [] })
+
+    Object.defineProperty(window, 'agentOps', {
+      value: {
+        ...window.agentOps,
+        reconnect: reconnectMock,
+        getMessages: getMessagesMock
+      },
+      configurable: true,
+      writable: true
+    })
+
+    render(
+      <TooltipProvider>
+        <SessionView sessionId="session-1" />
+      </TooltipProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('message-input')).toBeInTheDocument()
+    })
+
+    await waitFor(() => {
+      expect(reconnectMock).toHaveBeenCalledWith('/tmp/worktree-default', 'opc-session-1', 'session-1')
+    })
+
+    await waitFor(() => {
+      expect(getMessagesMock).toHaveBeenCalledWith('/tmp/worktree-default', 'opc-session-2')
+    })
+
+    await waitFor(() => {
+      expect(mockSessionUpdate).toHaveBeenCalledWith('session-1', {
+        opencode_session_id: 'opc-session-2'
+      })
+    })
+
+    expect(useSessionStore.getState().getSessionById('session-1')?.opencode_session_id).toBe(
+      'opc-session-2'
+    )
+  })
 })

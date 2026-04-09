@@ -93,10 +93,6 @@ function parsePlanPart(activity: SessionActivity): StreamingPart | null {
   }
 }
 
-function hasCanonicalTurnScopedId(messageId: string | null | undefined): boolean {
-  return typeof messageId === 'string' && /:user(?::|$)|:assistant(?::|$)/.test(messageId)
-}
-
 function extractAssistantTurnId(messageId: string): string | null {
   const assistantMatch = messageId.match(/^(.*):assistant(?::.*)?$/)
   return assistantMatch?.[1] ?? null
@@ -323,6 +319,76 @@ function upsertToolPart(
   return existingParts
 }
 
+interface TurnTiming {
+  turnId: string
+  firstTimestamp: number
+  assistantTimestamp?: number
+  lastTimestamp: number
+}
+
+function getTurnTiming(messages: OpenCodeMessage[]): TurnTiming[] {
+  const timingByTurnId = new Map<string, TurnTiming>()
+
+  for (const message of messages) {
+    const turnId =
+      message.role === 'assistant'
+        ? extractAssistantTurnId(message.id)
+        : (message.id.match(/^(.*):user(?::.*)?$/)?.[1] ?? null)
+    if (!turnId) continue
+
+    const timestamp = Date.parse(message.timestamp)
+    if (!Number.isFinite(timestamp)) continue
+
+    const existing = timingByTurnId.get(turnId)
+    if (!existing) {
+      timingByTurnId.set(turnId, {
+        turnId,
+        firstTimestamp: timestamp,
+        ...(message.role === 'assistant' ? { assistantTimestamp: timestamp } : {}),
+        lastTimestamp: timestamp
+      })
+      continue
+    }
+
+    existing.firstTimestamp = Math.min(existing.firstTimestamp, timestamp)
+    existing.lastTimestamp = Math.max(existing.lastTimestamp, timestamp)
+    if (message.role === 'assistant') {
+      existing.assistantTimestamp =
+        existing.assistantTimestamp === undefined
+          ? timestamp
+          : Math.min(existing.assistantTimestamp, timestamp)
+    }
+  }
+
+  return [...timingByTurnId.values()].sort((left, right) => left.firstTimestamp - right.firstTimestamp)
+}
+
+function inferTurnIdForActivity(
+  activity: SessionActivity,
+  turnTiming: TurnTiming[]
+): string | null {
+  if (turnTiming.length === 0) return null
+  if (turnTiming.length === 1) return turnTiming[0]?.turnId ?? null
+
+  const activityTime = Date.parse(activity.created_at)
+  if (!Number.isFinite(activityTime)) return null
+
+  const boundedTurn = turnTiming.find(
+    (turn) =>
+      turn.assistantTimestamp !== undefined &&
+      activityTime >= turn.firstTimestamp &&
+      activityTime <= turn.assistantTimestamp
+  )
+  if (boundedTurn) return boundedTurn.turnId
+
+  const enclosingTurn = turnTiming.find(
+    (turn) => activityTime >= turn.firstTimestamp && activityTime <= turn.lastTimestamp
+  )
+  if (enclosingTurn) return enclosingTurn.turnId
+
+  return null
+}
+
 export function mergeCodexActivityMessages(
   baseMessages: OpenCodeMessage[],
   activityRows: SessionActivity[]
@@ -356,6 +422,7 @@ export function mergeCodexActivityMessages(
       firstAssistantIndexByTurnId.set(turnId, index)
     }
   })
+  const turnTiming = getTurnTiming(mergedMessages)
 
   const anchoredSyntheticByTurnId = new Map<
     string,
@@ -381,7 +448,7 @@ export function mergeCodexActivityMessages(
       continue
     }
 
-    const turnId = activity.turn_id
+    const turnId = activity.turn_id ?? inferTurnIdForActivity(activity, turnTiming)
     const syntheticId = turnId ? `${turnId}:tool:${toolId}` : `tool:${toolId}`
     const targetCollection = turnId
       ? (anchoredSyntheticByTurnId.get(turnId) ?? [])

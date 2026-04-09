@@ -9,6 +9,7 @@ import type {
   WorktreeUpdate,
   SessionCreate,
   SessionUpdate,
+  SessionMessageUpsertByOpenCode,
   SessionSearchOptions,
   SpaceCreate,
   SpaceUpdate
@@ -294,6 +295,13 @@ export function registerDatabaseHandlers(): void {
   ipcMain.handle('db:sessionMessage:list', (_event, sessionId: string) => {
     return getDatabase().getSessionMessages(sessionId)
   })
+
+  ipcMain.handle(
+    'db:sessionMessage:upsertManyByOpenCode',
+    (_event, messages: SessionMessageUpsertByOpenCode[]) => {
+      return messages.map((message) => getDatabase().upsertSessionMessageByOpenCodeId(message))
+    }
+  )
 
   ipcMain.handle('db:sessionActivity:list', (_event, sessionId: string) => {
     return getDatabase().getSessionActivities(sessionId)

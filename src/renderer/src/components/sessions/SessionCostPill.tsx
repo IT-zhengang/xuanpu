@@ -1,5 +1,6 @@
-import { DollarSign, Clock3, Layers3, TriangleAlert } from 'lucide-react'
+import { DollarSign, Clock3, Layers3, TriangleAlert, CircleHelp } from 'lucide-react'
 import type { UsageAnalyticsSessionSummary } from '@shared/types/usage-analytics'
+import { calculateUsageCost } from '@shared/usage/pricing'
 import { Button } from '@/components/ui/button'
 import {
   Popover,
@@ -20,6 +21,8 @@ interface SessionCostPillProps {
     cacheRead: number
     cacheWrite: number
   } | null
+  modelId?: string | null
+  providerId?: string | null
   variant?: 'default' | 'compact'
 }
 
@@ -51,6 +54,8 @@ export function SessionCostPill({
   summary,
   fallbackCost,
   fallbackTokens,
+  modelId,
+  providerId,
   variant = 'default'
 }: SessionCostPillProps): React.JSX.Element | null {
   const { t } = useI18n()
@@ -61,10 +66,32 @@ export function SessionCostPill({
       (fallbackTokens?.output ?? 0) +
       (fallbackTokens?.cacheRead ?? 0) +
       (fallbackTokens?.cacheWrite ?? 0))
-
-  if (totalCost <= 0) return null
+  const estimatedCost =
+    totalCost <= 0 &&
+    fallbackTokens &&
+    totalTokens > 0 &&
+    modelId
+      ? calculateUsageCost(
+          modelId,
+          {
+            input: fallbackTokens.input,
+            output: fallbackTokens.output,
+            cacheRead: fallbackTokens.cacheRead,
+            cacheWrite: fallbackTokens.cacheWrite
+          },
+          providerId
+        )
+      : 0
 
   const compact = variant === 'compact'
+  const hasUsageData = Boolean(summary) || totalTokens > 0 || totalCost > 0
+  const hasResolvedCost = totalCost > 0
+  const hasEstimatedCost = !hasResolvedCost && estimatedCost > 0
+  const displayCost = hasResolvedCost ? totalCost : estimatedCost
+  const showUnavailableHint = hasUsageData && !hasResolvedCost && !hasEstimatedCost
+
+  if (!compact && totalCost <= 0) return null
+  if (compact && !hasUsageData) return null
 
   return (
     <Popover>
@@ -80,8 +107,13 @@ export function SessionCostPill({
           )}
           data-testid="session-cost-pill"
         >
-          <DollarSign className={compact ? 'h-3.5 w-3.5' : 'h-3.5 w-3.5'} />
-          <span className='font-mono'>{formatCurrency(totalCost)}</span>
+          <DollarSign className='h-3.5 w-3.5' />
+          {compact && displayCost <= 0 ? (
+            <span>{t('sessionView.costPill.title')}</span>
+          ) : (
+            <span className='font-mono'>{formatCurrency(displayCost)}</span>
+          )}
+          {showUnavailableHint && <CircleHelp className="h-3.5 w-3.5 text-amber-500" />}
           {summary?.partial && <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />}
         </Button>
       </PopoverTrigger>
@@ -95,8 +127,20 @@ export function SessionCostPill({
         <div className="mt-3 space-y-2 text-xs">
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">{t('sessionView.costPill.totalCost')}</span>
-            <span className="font-mono font-medium">{formatCurrency(totalCost)}</span>
+            <span className='font-mono font-medium'>
+              {displayCost > 0 ? formatCurrency(displayCost) : '--'}
+            </span>
           </div>
+          {hasEstimatedCost && (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+              {t('sessionView.costPill.estimatedHint')}
+            </div>
+          )}
+          {showUnavailableHint && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+              {t('sessionView.costPill.unavailableHint')}
+            </div>
+          )}
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">{t('sessionView.costPill.totalTokens')}</span>
             <span className="font-mono">{formatTokens(totalTokens)}</span>

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
 import {
   Send,
@@ -45,7 +46,8 @@ import {
   extractCost,
   extractModelRef,
   extractSelectedModel,
-  extractModelUsage
+  extractModelUsage,
+  extractMessageUsageId
 } from '@/lib/token-utils'
 import { useSettingsStore, resolveModelForSdk } from '@/stores/useSettingsStore'
 import type { SelectedModel } from '@/stores/useSettingsStore'
@@ -59,7 +61,10 @@ import { useProjectStore } from '@/stores/useProjectStore'
 import { useConnectionStore } from '@/stores/useConnectionStore'
 import { usePRReviewStore } from '@/stores/usePRReviewStore'
 import { useFileTreeStore } from '@/stores/useFileTreeStore'
-import { mapOpencodeMessagesToSessionViewMessages } from '@/lib/opencode-transcript'
+import {
+  extractTextContentFromParts,
+  mapOpencodeMessagesToSessionViewMessages
+} from '@/lib/opencode-transcript'
 import { appendStreamedAssistantFallback } from '@/lib/transcript-refresh'
 import { deriveCodexTimelineMessages, mergeCodexActivityMessages } from '@/lib/codex-timeline'
 import { COMPLETION_WORDS } from '@/lib/format-utils'
@@ -574,7 +579,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
   const [isSending, setIsSending] = useState(false)
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState<string>('')
-  const [_editingAttachments, _setEditingAttachments] = useState<MessagePart[]>([])
+  const [, setEditingAttachments] = useState<MessagePart[]>([])
   const [queuedMessages, setQueuedMessages] = useState<
     Array<{
       id: string
@@ -737,8 +742,8 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           variant: sessionRecord.model_variant ?? undefined
         }
       : globalModel
-  const currentModelId = effectiveModel?.modelID ?? 'claude-opus-4-5-20251101'
-  const currentProviderId = effectiveModel?.providerID ?? 'anthropic'
+  const currentModelId = effectiveModel?.modelID ?? ''
+  const currentProviderId = effectiveModel?.providerID
   const sessionUsesProjectRuntime =
     !projectRecord || projectRecord.agent_sdk === null
       ? sessionAgentSdk === defaultAgentSdk
@@ -888,6 +893,13 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
   // role field.
   const lastSentPromptRef = useRef<string | null>(null)
 
+  const markMessageUsageApplied = useCallback((messageId: string | null): boolean => {
+    if (!messageId) return true
+    if (finalizedMessageIdsRef.current.has(messageId)) return false
+    finalizedMessageIdsRef.current.add(messageId)
+    return true
+  }, [])
+
   // Canonical transcript source used by reload/finalize/retry paths.
   const transcriptSourceRef = useRef<{
     worktreePath: string | null
@@ -950,9 +962,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
 
       setSessionUsageSummary(result.data)
 
-      if (result.data.total_cost > 0) {
-        useContextStore.getState().setSessionCost(sessionId, result.data.total_cost)
-      }
+      useContextStore.getState().setSessionCost(sessionId, result.data.total_cost)
     } catch {
       // Non-fatal — session cost pill falls back to live context store state.
     }
@@ -1174,6 +1184,74 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
     return connectResult.sessionId
   }, [opencodeSessionId, sessionId, worktreePath])
 
+  const syncResolvedAgentSessionId = useCallback(
+    async (nextSessionId: string, previousSessionId: string | null | undefined): Promise<void> => {
+      setOpencodeSessionId(nextSessionId)
+      syncedRuntimeSessionIdRef.current = nextSessionId
+      transcriptSourceRef.current.opencodeSessionId = nextSessionId
+      useSessionStore.getState().setOpenCodeSessionId(sessionId, nextSessionId)
+
+      if (!previousSessionId || previousSessionId !== nextSessionId) {
+        try {
+          await window.db.session.update(sessionId, {
+            opencode_session_id: nextSessionId
+          })
+        } catch (error) {
+          console.warn('Failed to persist resolved runtime session ID:', error)
+        }
+      }
+    },
+    [sessionId]
+  )
+
+  const applyReconnectStatus = useCallback(
+    (
+      sessionStatus: 'idle' | 'busy' | 'retry' | undefined,
+      storedStatus: { status: string } | undefined,
+      options?: { keepPlanReady?: boolean }
+    ) => {
+      const hasPendingPlan = useSessionStore.getState().getPendingPlan(sessionId)
+      if (hasPendingPlan && options?.keepPlanReady !== false) return
+
+      if (sessionStatus === 'busy') {
+        setSessionRetry(null)
+        setSessionErrorMessage(null)
+        setSessionErrorStderr(null)
+        setIsStreaming(true)
+        setIsSending(true)
+        const currentMode = useSessionStore.getState().getSessionMode(sessionId)
+        useWorktreeStatusStore
+          .getState()
+          .setSessionStatus(sessionId, currentMode === 'plan' ? 'planning' : 'working')
+        return
+      }
+
+      if (sessionStatus === 'idle') {
+        setIsStreaming(false)
+        setIsSending(false)
+        setSessionRetry(null)
+        setSessionErrorMessage(null)
+        setSessionErrorStderr(null)
+        if (storedStatus?.status === 'working' || storedStatus?.status === 'planning') {
+          const sendTime = messageSendTimes.get(sessionId)
+          const durationMs = sendTime ? Date.now() - sendTime : 0
+          const word = COMPLETION_WORDS[Math.floor(Math.random() * COMPLETION_WORDS.length)]
+          useWorktreeStatusStore.getState().setSessionStatus(sessionId, 'completed', { word, durationMs })
+        } else {
+          useWorktreeStatusStore.getState().clearSessionStatus(sessionId)
+        }
+        return
+      }
+
+      if (sessionStatus === 'retry') {
+        setIsStreaming(true)
+        setIsSending(true)
+        setSessionRetry({})
+      }
+    },
+    [sessionId]
+  )
+
   // Reset prompt history navigation on session change
   useEffect(() => {
     setHistoryIndex(null)
@@ -1201,6 +1279,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
     })
   }, [
     getModelForRequests,
+    sessionAgentSdk,
     sessionId,
     sessionRecord?.model_provider_id,
     sessionRecord?.model_id,
@@ -1506,7 +1585,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
     }
     const isCodexSession = sessionRecord?.agent_sdk === 'codex'
 
-    const loadMessages = async (
+  const loadMessages = async (
       source?: {
         worktreePath?: string | null
         opencodeSessionId?: string | null
@@ -1537,6 +1616,56 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
       let loadedFromOpenCode = false
       let codexActivities: SessionActivity[] = []
       const currentStoredStatus = useWorktreeStatusStore.getState().sessionStatuses[sessionId]
+
+      const persistLiveTranscriptMetadata = async (messages: unknown[]): Promise<void> => {
+        if (!window.db.sessionMessage?.upsertManyByOpenCode) return
+
+        const rows = messages.flatMap((rawMessage) => {
+          if (typeof rawMessage !== 'object' || rawMessage === null) return []
+
+          const messageRecord = rawMessage as Record<string, unknown>
+          const opencodeMessageId =
+            typeof messageRecord.id === 'string' && messageRecord.id.length > 0
+              ? messageRecord.id
+              : null
+          const role =
+            messageRecord.role === 'user' ||
+            messageRecord.role === 'assistant' ||
+            messageRecord.role === 'system'
+              ? messageRecord.role
+              : null
+
+          if (!opencodeMessageId || !role) return []
+
+          const parts = Array.isArray(messageRecord.parts) ? messageRecord.parts : []
+          const content =
+            typeof messageRecord.content === 'string'
+              ? messageRecord.content
+              : extractTextContentFromParts(parts)
+          const createdAt =
+            typeof messageRecord.timestamp === 'string' ? messageRecord.timestamp : undefined
+
+          return [
+            {
+              session_id: sessionId,
+              role,
+              opencode_message_id: opencodeMessageId,
+              content,
+              opencode_message_json: JSON.stringify(messageRecord),
+              opencode_parts_json: Array.isArray(parts) ? JSON.stringify(parts) : null,
+              created_at: createdAt
+            }
+          ]
+        })
+
+        if (rows.length === 0) return
+
+        try {
+          await window.db.sessionMessage.upsertManyByOpenCode(rows)
+        } catch (error) {
+          console.warn('Failed to persist session message metadata:', error)
+        }
+      }
 
       if (isCodexSession) {
         const durableState = await loadCodexDurableState(sessionId)
@@ -1574,6 +1703,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           loadedFromOpenCode = true
 
           const opencodeMessages = Array.isArray(result.messages) ? result.messages : []
+          await persistLiveTranscriptMetadata(opencodeMessages)
           if (isCodexSession) {
             loadedMessages = mergeCodexActivityMessages(
               mapOpencodeMessagesToSessionViewMessages(opencodeMessages),
@@ -1613,17 +1743,13 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             }
           }
 
-          if (snapshotTokens || totalCost > 0) {
-            useContextStore.getState().resetSessionTokens(sessionId)
-            if (snapshotTokens) {
-              useContextStore
-                .getState()
-                .setSessionTokens(sessionId, snapshotTokens, snapshotModelRef)
-            }
-            if (totalCost > 0) {
-              useContextStore.getState().setSessionCost(sessionId, totalCost)
-            }
+          useContextStore.getState().resetSessionTokens(sessionId)
+          if (snapshotTokens) {
+            useContextStore
+              .getState()
+              .setSessionTokens(sessionId, snapshotTokens, snapshotModelRef)
           }
+          useContextStore.getState().setSessionCost(sessionId, totalCost)
 
           if (!sessionModelHydratedRef.current && latestUserModel) {
             sessionModelHydratedRef.current = true
@@ -1779,6 +1905,8 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             })
           )
         }
+
+        await refreshSessionUsageSummary()
       } catch (error) {
         console.error('Failed to refresh messages after stream completion:', error)
         toast.error(t('sessionView.toasts.refreshResponseError'))
@@ -2542,8 +2670,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
               ])
               // Reset stale token snapshot — compaction truncates the context window.
               // The next assistant message.updated will carry accurate post-compaction tokens.
-              // Use clearSessionTokenSnapshot (not resetSessionTokens) to preserve
-              // the accumulated cost and model identity for the session.
+              // Keep cumulative cost, but clear the stale token/model snapshot.
               useContextStore.getState().clearSessionTokenSnapshot(sessionId)
               immediateFlush()
               setIsCompacting(true)
@@ -2580,6 +2707,9 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             if (info?.time?.completed) {
               const data = event.data as Record<string, unknown> | undefined
               if (data) {
+                const messageUsageId = extractMessageUsageId(data)
+                if (!markMessageUsageApplied(messageUsageId)) return
+
                 const tokens = extractTokens(data)
                 if (tokens) {
                   const modelRef = extractModelRef(data) ?? undefined
@@ -2594,7 +2724,10 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
                 if (modelUsageEntries) {
                   for (const entry of modelUsageEntries) {
                     if (entry.contextWindow > 0) {
-                      useContextStore.getState().setModelLimit(entry.modelName, entry.contextWindow)
+                      useContextStore
+                        .getState()
+                        .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
+                      useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
                     }
                   }
                 }
@@ -2625,7 +2758,6 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             setIsSending(false)
             setIsCompacting(false)
             setQueuedMessages([])
-            void refreshSessionUsageSummary()
             // Clear any stale command approvals when session goes idle
             useCommandApprovalStore.getState().clearSession(sessionId)
 
@@ -2722,7 +2854,6 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
               setIsSending(false)
               setIsCompacting(false)
               setQueuedMessages([])
-              void refreshSessionUsageSummary()
               // Clear any stale command approvals when session goes idle
               useCommandApprovalStore.getState().clearSession(sessionId)
 
@@ -3127,16 +3258,16 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           )
           if (shouldAbortInit()) return
           if (reconnectResult.success) {
-            setOpencodeSessionId(existingOpcSessionId)
-            useSessionStore.getState().setOpenCodeSessionId(sessionId, existingOpcSessionId)
-            transcriptSourceRef.current.opencodeSessionId = existingOpcSessionId
+            const resolvedOpcSessionId = reconnectResult.sessionId ?? existingOpcSessionId
+            await syncResolvedAgentSessionId(resolvedOpcSessionId, existingOpcSessionId)
+            if (shouldAbortInit()) return
             // Only update revertMessageID from reconnect if it carries a value;
             // sessionInfo already hydrated the authoritative value earlier.
             if (reconnectResult.revertMessageID != null) {
               setRevertMessageID(reconnectResult.revertMessageID)
             }
             fetchModelLimits()
-            fetchCommands(wtPath, existingOpcSessionId)
+            fetchCommands(wtPath, resolvedOpcSessionId)
             hydratePermissions(wtPath)
             // Create response log file if logging is enabled
             if (isLogModeRef.current) {
@@ -3152,52 +3283,14 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             // Part B: Authoritative status from OpenCode SDK.
             // Corrects Part A if the session finished while we were away,
             // or confirms busy if the store was accurate.
-            // Don't overwrite plan_ready — session is blocked waiting for plan approval.
-            const hasPendingPlanOnReconnect = useSessionStore.getState().getPendingPlan(sessionId)
-            if (reconnectResult.sessionStatus === 'busy') {
-              if (!hasPendingPlanOnReconnect) {
-                setSessionRetry(null)
-                setSessionErrorMessage(null)
-                setSessionErrorStderr(null)
-                setIsStreaming(true)
-                setIsSending(true)
-                const currentMode = useSessionStore.getState().getSessionMode(sessionId)
-                useWorktreeStatusStore
-                  .getState()
-                  .setSessionStatus(sessionId, currentMode === 'plan' ? 'planning' : 'working')
-              }
-            } else if (reconnectResult.sessionStatus === 'idle') {
-              if (!hasPendingPlanOnReconnect) {
-                setIsStreaming(false)
-                setIsSending(false)
-                setSessionRetry(null)
-                setSessionErrorMessage(null)
-                setSessionErrorStderr(null)
-                // If the session was previously busy, the agent finished while we
-                // were away — show a completion badge instead of clearing to "Ready".
-                if (storedStatus?.status === 'working' || storedStatus?.status === 'planning') {
-                  const sendTime = messageSendTimes.get(sessionId)
-                  const durationMs = sendTime ? Date.now() - sendTime : 0
-                  const word = COMPLETION_WORDS[Math.floor(Math.random() * COMPLETION_WORDS.length)]
-                  useWorktreeStatusStore
-                    .getState()
-                    .setSessionStatus(sessionId, 'completed', { word, durationMs })
-                } else {
-                  useWorktreeStatusStore.getState().clearSessionStatus(sessionId)
-                }
-              }
-            } else if (reconnectResult.sessionStatus === 'retry') {
-              setIsStreaming(true)
-              setIsSending(true)
-              setSessionRetry({})
-            }
+            applyReconnectStatus(reconnectResult.sessionStatus, storedStatus)
 
             // Refresh transcript using the confirmed live OpenCode session ID.
             // This avoids keeping a stale/partial pre-connect transcript.
-            await loadMessages({ worktreePath: wtPath, opencodeSessionId: existingOpcSessionId })
+            await loadMessages({ worktreePath: wtPath, opencodeSessionId: resolvedOpcSessionId })
             if (shouldAbortInit()) return
 
-            await sendPendingMessage(wtPath, existingOpcSessionId)
+            await sendPendingMessage(wtPath, resolvedOpcSessionId)
             return
           }
         }
@@ -3213,15 +3306,9 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           fetchModelLimits()
           fetchCommands(wtPath, connectResult.sessionId)
           hydratePermissions(wtPath)
-          // Persist only for first-time session connections.
-          // If reconnect to an existing OpenCode session failed and we had to
-          // open a temporary replacement session, keep the original pointer in
-          // DB to avoid losing historical transcript linkage.
-          if (!existingOpcSessionId) {
-            await window.db.session.update(sessionId, {
-              opencode_session_id: connectResult.sessionId
-            })
-          }
+          await window.db.session.update(sessionId, {
+            opencode_session_id: connectResult.sessionId
+          })
           // Create response log file if logging is enabled
           if (isLogModeRef.current) {
             try {
@@ -3330,13 +3417,14 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           sessionId
         )
         if (reconnectResult.success) {
-          setOpencodeSessionId(existingOpcSessionId)
-          useSessionStore.getState().setOpenCodeSessionId(sessionId, existingOpcSessionId)
-          transcriptSourceRef.current.opencodeSessionId = existingOpcSessionId
+          const resolvedOpcSessionId = reconnectResult.sessionId ?? existingOpcSessionId
+          await syncResolvedAgentSessionId(resolvedOpcSessionId, existingOpcSessionId)
           if (reconnectResult.revertMessageID != null) {
             setRevertMessageID(reconnectResult.revertMessageID)
           }
-          activeOpcSessionId = existingOpcSessionId
+          activeOpcSessionId = resolvedOpcSessionId
+          const storedStatus = useWorktreeStatusStore.getState().sessionStatuses[sessionId]
+          applyReconnectStatus(reconnectResult.sessionStatus, storedStatus)
         } else {
           setRevertMessageID(null)
           activeOpcSessionId = null
@@ -3354,11 +3442,9 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
         useSessionStore.getState().setOpenCodeSessionId(sessionId, connectResult.sessionId)
         transcriptSourceRef.current.opencodeSessionId = connectResult.sessionId
         setRevertMessageID(null)
-        if (!existingOpcSessionId) {
-          await window.db.session.update(sessionId, {
-            opencode_session_id: connectResult.sessionId
-          })
-        }
+        await window.db.session.update(sessionId, {
+          opencode_session_id: connectResult.sessionId
+        })
       }
 
       const transcriptResult = await window.agentOps.getMessages(
@@ -3387,7 +3473,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
         errorMessage: error instanceof Error ? error.message : t('sessionView.error.connectGeneric')
       })
     }
-  }, [sessionId, t])
+  }, [applyReconnectStatus, sessionId, syncResolvedAgentSessionId, t])
 
   // Handle question reply
   const handleQuestionReply = useCallback(
@@ -4166,7 +4252,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
           ? message.content.slice(ASK_MODE_PREFIX.length)
           : message.content
       setEditingContent(displayContent)
-      _setEditingAttachments(message.attachments ?? [])
+      setEditingAttachments(message.attachments ?? [])
     },
     []
   )
@@ -4174,7 +4260,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
   const handleCancelEdit = useCallback(() => {
     setEditingMessageId(null)
     setEditingContent('')
-    _setEditingAttachments([])
+    setEditingAttachments([])
   }, [])
 
   const handleSaveEdit = useCallback(
@@ -4196,7 +4282,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
 
       setEditingMessageId(null)
       setEditingContent('')
-      _setEditingAttachments([])
+      setEditingAttachments([])
 
       await handleSend(contentToSend)
     },
@@ -5429,6 +5515,8 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
                               }
                             : null
                         }
+                        modelId={currentModelId}
+                        providerId={currentProviderId}
                         variant="compact"
                       />
                     </div>

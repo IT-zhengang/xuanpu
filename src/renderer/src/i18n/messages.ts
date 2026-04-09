@@ -1006,6 +1006,8 @@ export const messages: Record<AppLocale, MessageTree> = {
         cacheRead: 'Cache Read',
         model: 'Model',
         duration: 'Duration',
+        estimatedHint: 'Displayed as a live estimate using the current model pricing until analytics data is synchronized.',
+        unavailableHint: 'Token usage is available, but this model/session has no resolved pricing yet.',
         partialData: 'Some historical data could not be synchronized yet.'
       },
       connection: {
@@ -3090,6 +3092,8 @@ export const messages: Record<AppLocale, MessageTree> = {
         cacheRead: 'Cache 读取',
         model: '模型',
         duration: '时长',
+        estimatedHint: '当前先按正在使用的模型价格做实时估算，待统计同步完成后会自动切换为最终金额。',
+        unavailableHint: '当前仅拿到了 Token 用量，但该模型/会话暂时没有可解析的定价信息。',
         partialData: '部分历史数据尚未完成同步。'
       },
       connection: {

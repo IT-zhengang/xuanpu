@@ -145,7 +145,19 @@ const db = {
   },
 
   sessionMessage: {
-    list: (sessionId: string) => ipcRenderer.invoke('db:sessionMessage:list', sessionId)
+    list: (sessionId: string) => ipcRenderer.invoke('db:sessionMessage:list', sessionId),
+    upsertManyByOpenCode: (
+      messages: Array<{
+        session_id: string
+        role: 'assistant' | 'user' | 'system'
+        opencode_message_id: string
+        content: string
+        opencode_message_json?: string | null
+        opencode_parts_json?: string | null
+        opencode_timeline_json?: string | null
+        created_at?: string
+      }>
+    ) => ipcRenderer.invoke('db:sessionMessage:upsertManyByOpenCode', messages)
   },
 
   sessionActivity: {
@@ -1097,6 +1109,7 @@ const agentOps = {
     hiveSessionId: string
   ): Promise<{
     success: boolean
+    sessionId?: string
     sessionStatus?: 'idle' | 'busy' | 'retry'
     revertMessageID?: string | null
   }> => ipcRenderer.invoke('agent:reconnect', worktreePath, sessionId, hiveSessionId),

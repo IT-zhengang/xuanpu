@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from 'vitest'
 import { renderHook, cleanup } from '@testing-library/react'
-import { useOpenCodeGlobalListener } from '@/hooks/useOpenCodeGlobalListener'
-import { extractTokens, extractCost, extractModelRef } from '@/lib/token-utils'
+import { useAgentGlobalListener } from '@/hooks/useAgentGlobalListener'
+import { extractTokens, extractCost, extractModelRef, extractMessageUsageId } from '@/lib/token-utils'
 
 /**
  * Session 4: Global Listener Busy Handling — Tests
@@ -16,7 +16,7 @@ import { extractTokens, extractCost, extractModelRef } from '@/lib/token-utils'
 // Capture the stream callback registered by the hook
 let streamCallback: ((event: Record<string, unknown>) => void) | null = null
 
-// Mock window.opencodeOps.onStream to capture the callback
+// Mock window.agentOps.onStream to capture the callback
 const mockOnStream = vi.fn((cb: (event: Record<string, unknown>) => void) => {
   streamCallback = cb
   return () => {
@@ -27,7 +27,7 @@ const mockOnStream = vi.fn((cb: (event: Record<string, unknown>) => void) => {
 // Mock window.worktreeOps.onBranchRenamed
 const mockOnBranchRenamed = vi.fn(() => () => {})
 
-Object.defineProperty(window, 'opencodeOps', {
+Object.defineProperty(window, 'agentOps', {
   writable: true,
   value: { onStream: mockOnStream }
 })
@@ -54,6 +54,24 @@ vi.mock('@/stores/useQuestionStore', () => ({
       removeQuestion: vi.fn()
     })
   }
+}))
+
+vi.mock('@/stores/useSettingsStore', () => ({
+  useSettingsStore: {
+    getState: () => ({
+      showUsageIndicator: false
+    })
+  }
+}))
+
+vi.mock('@/stores', () => ({
+  useUsageStore: {
+    getState: () => ({
+      fetchUsageForProvider: vi.fn(),
+      fetchUsage: vi.fn()
+    })
+  },
+  resolveUsageProvider: vi.fn(() => 'all')
 }))
 
 // Mock usePermissionStore
@@ -97,12 +115,14 @@ vi.mock('@/lib/token-utils', () => ({
   extractTokens: vi.fn(() => null),
   extractCost: vi.fn(() => 0),
   extractModelRef: vi.fn(() => null),
+  extractMessageUsageId: vi.fn(() => null),
   extractModelUsage: vi.fn(() => null)
 }))
 
 const extractTokensMock = vi.mocked(extractTokens)
 const extractCostMock = vi.mocked(extractCost)
 const extractModelRefMock = vi.mocked(extractModelRef)
+const extractMessageUsageIdMock = vi.mocked(extractMessageUsageId)
 
 // Spies for stores we want to verify
 const setSessionStatusSpy = vi.fn()
@@ -133,7 +153,9 @@ vi.mock('@/stores/useWorktreeStatusStore', () => ({
     getState: () => ({
       setSessionStatus: setSessionStatusSpy,
       clearSessionStatus: clearSessionStatusSpy,
-      setLastMessageTime: setLastMessageTimeSpy
+      setLastMessageTime: setLastMessageTimeSpy,
+      sessionStatuses: {},
+      lastMessageTimeByWorktree: {}
     })
   }
 }))
@@ -147,6 +169,7 @@ describe('Session 4: Global Listener Busy Handling', () => {
     extractTokensMock.mockReturnValue(null)
     extractCostMock.mockReturnValue(0)
     extractModelRefMock.mockReturnValue(null)
+    extractMessageUsageIdMock.mockReturnValue(null)
   })
 
   afterEach(() => {
@@ -154,7 +177,7 @@ describe('Session 4: Global Listener Busy Handling', () => {
   })
 
   function mountListenerAndGetCallback() {
-    renderHook(() => useOpenCodeGlobalListener())
+    renderHook(() => useAgentGlobalListener())
     expect(streamCallback).not.toBeNull()
     return streamCallback!
   }
@@ -311,5 +334,40 @@ describe('Session 4: Global Listener Busy Handling', () => {
 
     expect(setSessionTokensSpy).not.toHaveBeenCalled()
     expect(addSessionCostSpy).not.toHaveBeenCalled()
+  })
+
+  test('duplicate completed background message.updated does not add cost twice', () => {
+    const cb = mountListenerAndGetCallback()
+
+    extractMessageUsageIdMock.mockReturnValue('assistant-msg-1')
+    extractTokensMock.mockReturnValue({
+      input: 500,
+      output: 200,
+      reasoning: 50,
+      cacheRead: 25,
+      cacheWrite: 10
+    })
+    extractCostMock.mockReturnValue(0.015)
+    extractModelRefMock.mockReturnValue({
+      providerID: 'anthropic',
+      modelID: 'claude-sonnet-4-5-20250929'
+    })
+
+    const event = {
+      type: 'message.updated',
+      sessionId: 'session-B',
+      data: {
+        id: 'assistant-msg-1',
+        role: 'assistant',
+        info: { id: 'assistant-msg-1', time: { completed: '2026-02-17T12:00:00.000Z' } }
+      }
+    }
+
+    cb(event)
+    cb(event)
+
+    expect(setSessionTokensSpy).toHaveBeenCalledTimes(1)
+    expect(addSessionCostSpy).toHaveBeenCalledTimes(1)
+    expect(addSessionCostSpy).toHaveBeenCalledWith('session-B', 0.015)
   })
 })

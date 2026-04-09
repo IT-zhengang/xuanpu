@@ -229,6 +229,7 @@ export class ClaudeCodeImplementer implements AgentSdkImplementer, AgentRuntimeA
     hiveSessionId: string
   ): Promise<{
     success: boolean
+    sessionId?: string
     sessionStatus?: 'idle' | 'busy' | 'retry'
     revertMessageID?: string | null
   }> {
@@ -244,7 +245,12 @@ export class ClaudeCodeImplementer implements AgentSdkImplementer, AgentRuntimeA
         hiveSessionId,
         sessionStatus
       })
-      return { success: true, sessionStatus, revertMessageID: existing.revertMessageID ?? null }
+      return {
+        success: true,
+        sessionId: agentSessionId,
+        sessionStatus,
+        revertMessageID: existing.revertMessageID ?? null
+      }
     }
 
     // Sessions with pending:: prefix were never materialized — they were created
@@ -278,7 +284,12 @@ export class ClaudeCodeImplementer implements AgentSdkImplementer, AgentRuntimeA
     this.sessions.set(key, state)
 
     log.info('Reconnected (restored from DB)', { worktreePath, agentSessionId, hiveSessionId })
-    return { success: true, sessionStatus: 'idle', revertMessageID: null }
+    return {
+      success: true,
+      sessionId: agentSessionId,
+      sessionStatus: 'idle',
+      revertMessageID: null
+    }
   }
 
   private getOrCreateLspService(worktreePath: string): LspService {
@@ -3068,7 +3079,8 @@ export class ClaudeCodeImplementer implements AgentSdkImplementer, AgentRuntimeA
     let result: void | RewindFilesResult | undefined
     let gotMessage = false
     try {
-      for await (const _message of rewindQuery) {
+      for await (const message of rewindQuery) {
+        void message
         gotMessage = true
         result = await queryObj.rewindFiles(targetUuid)
         break

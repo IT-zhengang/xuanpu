@@ -10,7 +10,13 @@ import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useContextStore, type TokenInfo, type SessionModelRef } from '@/stores/useContextStore'
 import { useRecentStore } from '@/stores/useRecentStore'
 import { useUsageStore, resolveUsageProvider } from '@/stores'
-import { extractTokens, extractCost, extractModelRef, extractModelUsage } from '@/lib/token-utils'
+import {
+  extractTokens,
+  extractCost,
+  extractModelRef,
+  extractModelUsage,
+  extractMessageUsageId
+} from '@/lib/token-utils'
 import { COMPLETION_WORDS } from '@/lib/format-utils'
 import { messageSendTimes } from '@/lib/message-send-times'
 import { checkAutoApprove } from '@/lib/permissionUtils'
@@ -167,6 +173,7 @@ function markBackgroundSessionCompleted(sessionId: string): void {
 export function useAgentGlobalListener(): void {
   const backgroundFollowUpDispatchingRef = useRef<Set<string>>(new Set())
   const deferredIdleWhileDispatchingRef = useRef<Set<string>>(new Set())
+  const processedUsageMessageIdsRef = useRef<Set<string>>(new Set())
 
   // Listen for branch auto-rename events from the main process
   useEffect(() => {
@@ -249,6 +256,13 @@ export function useAgentGlobalListener(): void {
             if (info?.time?.completed) {
               const data = event.data as Record<string, unknown> | undefined
               if (data) {
+                const messageUsageId = extractMessageUsageId(data)
+                const dedupeKey = messageUsageId ? `${sessionId}:${messageUsageId}` : null
+                if (dedupeKey) {
+                  if (processedUsageMessageIdsRef.current.has(dedupeKey)) return
+                  processedUsageMessageIdsRef.current.add(dedupeKey)
+                }
+
                 const tokens = extractTokens(data)
                 if (tokens) {
                   const modelRef = extractModelRef(data) ?? undefined
@@ -263,7 +277,10 @@ export function useAgentGlobalListener(): void {
                 if (modelUsageEntries) {
                   for (const entry of modelUsageEntries) {
                     if (entry.contextWindow > 0) {
-                      useContextStore.getState().setModelLimit(entry.modelName, entry.contextWindow)
+                      useContextStore
+                        .getState()
+                        .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
+                      useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
                     }
                   }
                 }

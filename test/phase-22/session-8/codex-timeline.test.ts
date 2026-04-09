@@ -6,7 +6,7 @@ import {
 } from '../../../src/renderer/src/lib/codex-timeline'
 
 describe('codex timeline derivation', () => {
-  it('renders tool activities inside the turn block instead of collapsing them above the transcript', () => {
+  it('renders single-turn tool activities before the completion summary', () => {
     const messages: SessionMessage[] = [
       {
         id: 'db-user-1',
@@ -68,9 +68,9 @@ describe('codex timeline derivation', () => {
 
     expect(timeline).toHaveLength(3)
     expect(timeline[0]?.id).toBe('turn-1:user')
-    expect(timeline[1]?.id).toBe('turn-1:assistant')
-    expect(timeline[2]?.id).toBe('tool:tool-1')
-    expect(timeline[2]?.parts?.some((part) => part.type === 'tool_use')).toBe(true)
+    expect(timeline[1]?.id).toBe('turn-1:tool:tool-1')
+    expect(timeline[2]?.id).toBe('turn-1:assistant')
+    expect(timeline[1]?.parts?.some((part) => part.type === 'tool_use')).toBe(true)
   })
 
   it('projects persisted plan.ready activity into an ExitPlanMode tool card', () => {
@@ -129,7 +129,7 @@ describe('codex timeline derivation', () => {
     ]
 
     const timeline = deriveCodexTimelineMessages(messages, activities)
-    const planRow = timeline.find((message) => message.id === 'tool:codex-exitplan-tool-1')
+    const planRow = timeline.find((message) => message.id === 'turn-1:tool:codex-exitplan-tool-1')
 
     expect(
       planRow?.parts?.some(
@@ -228,7 +228,7 @@ describe('codex timeline derivation', () => {
     ).toBe(true)
   })
 
-  it('keeps unanchored activities as standalone assistant rows when multiple turns exist', () => {
+  it('infers missing turn ids from timestamps so tool activities stay above the turn summary', () => {
     const messages: SessionMessage[] = [
       {
         id: 'db-user-1',
@@ -301,18 +301,108 @@ describe('codex timeline derivation', () => {
     ]
 
     const timeline = deriveCodexTimelineMessages(messages, activities)
-    const synthetic = timeline.find((message) => message.id === 'tool:tool-unanchored')
+    const synthetic = timeline.find((message) => message.id === 'turn-2:tool:tool-unanchored')
+
+    expect(timeline.map((message) => message.id)).toEqual([
+      'turn-1:user',
+      'turn-1:assistant',
+      'turn-2:user',
+      'turn-2:tool:tool-unanchored',
+      'turn-2:assistant'
+    ])
+    expect(
+      synthetic?.parts?.some(
+        (part) => part.type === 'tool_use' && part.toolUse?.id === 'tool-unanchored'
+      )
+    ).toBe(true)
+  })
+
+
+  it('keeps truly post-turn activities unanchored when timestamps fall after the assistant summary', () => {
+    const messages: SessionMessage[] = [
+      {
+        id: 'db-user-1',
+        session_id: 'session-1',
+        role: 'user',
+        content: 'First prompt',
+        opencode_message_id: 'turn-1:user',
+        opencode_message_json: null,
+        opencode_parts_json: JSON.stringify([{ type: 'text', text: 'First prompt' }]),
+        opencode_timeline_json: null,
+        created_at: '2026-03-14T10:00:00.000Z'
+      },
+      {
+        id: 'db-assistant-1',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'First answer',
+        opencode_message_id: 'turn-1:assistant',
+        opencode_message_json: null,
+        opencode_parts_json: JSON.stringify([{ type: 'text', text: 'First answer' }]),
+        opencode_timeline_json: null,
+        created_at: '2026-03-14T10:00:05.000Z'
+      },
+      {
+        id: 'db-user-2',
+        session_id: 'session-1',
+        role: 'user',
+        content: 'Second prompt',
+        opencode_message_id: 'turn-2:user',
+        opencode_message_json: null,
+        opencode_parts_json: JSON.stringify([{ type: 'text', text: 'Second prompt' }]),
+        opencode_timeline_json: null,
+        created_at: '2026-03-14T10:01:00.000Z'
+      },
+      {
+        id: 'db-assistant-2',
+        session_id: 'session-1',
+        role: 'assistant',
+        content: 'Second answer',
+        opencode_message_id: 'turn-2:assistant',
+        opencode_message_json: null,
+        opencode_parts_json: JSON.stringify([{ type: 'text', text: 'Second answer' }]),
+        opencode_timeline_json: null,
+        created_at: '2026-03-14T10:01:08.000Z'
+      }
+    ]
+
+    const activities: SessionActivity[] = [
+      {
+        id: 'activity-post-turn',
+        session_id: 'session-1',
+        agent_session_id: 'thread-1',
+        thread_id: 'thread-1',
+        turn_id: null,
+        item_id: 'tool-post-turn',
+        request_id: null,
+        kind: 'tool.completed',
+        tone: 'tool',
+        summary: 'Read',
+        payload_json: JSON.stringify({
+          item: {
+            toolName: 'Read',
+            input: { filePath: 'src/post-turn.ts' },
+            output: 'ok'
+          }
+        }),
+        sequence: null,
+        created_at: '2026-03-14T10:01:30.000Z'
+      }
+    ]
+
+    const timeline = deriveCodexTimelineMessages(messages, activities)
+    const synthetic = timeline.find((message) => message.id === 'tool:tool-post-turn')
 
     expect(timeline.map((message) => message.id)).toEqual([
       'turn-1:user',
       'turn-1:assistant',
       'turn-2:user',
       'turn-2:assistant',
-      'tool:tool-unanchored'
+      'tool:tool-post-turn'
     ])
     expect(
       synthetic?.parts?.some(
-        (part) => part.type === 'tool_use' && part.toolUse?.id === 'tool-unanchored'
+        (part) => part.type === 'tool_use' && part.toolUse?.id === 'tool-post-turn'
       )
     ).toBe(true)
   })

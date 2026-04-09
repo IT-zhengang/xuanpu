@@ -63,18 +63,22 @@ export const useContextStore = create<ContextState>()((set, get) => ({
   modelLimits: {},
 
   setSessionTokens: (sessionId: string, tokens: TokenInfo, model?: SessionModelRef) => {
-    set((state) => ({
-      tokensBySession: {
-        ...state.tokensBySession,
-        [sessionId]: { ...tokens }
-      },
-      modelBySession: model
-        ? {
-            ...state.modelBySession,
-            [sessionId]: model
-          }
-        : state.modelBySession
-    }))
+    set((state) => {
+      const nextModels = { ...state.modelBySession }
+      if (model) {
+        nextModels[sessionId] = model
+      } else {
+        delete nextModels[sessionId]
+      }
+
+      return {
+        tokensBySession: {
+          ...state.tokensBySession,
+          [sessionId]: { ...tokens }
+        },
+        modelBySession: nextModels
+      }
+    })
   },
 
   addSessionCost: (sessionId: string, cost: number) => {
@@ -113,9 +117,14 @@ export const useContextStore = create<ContextState>()((set, get) => ({
 
   clearSessionTokenSnapshot: (sessionId: string) => {
     set((state) => {
-      const { [sessionId]: _removed, ...rest } = state.tokensBySession
-      void _removed
-      return { tokensBySession: rest }
+      const { [sessionId]: _removedTokens, ...restTokens } = state.tokensBySession
+      const { [sessionId]: _removedModel, ...restModel } = state.modelBySession
+      void _removedTokens
+      void _removedModel
+      return {
+        tokensBySession: restTokens,
+        modelBySession: restModel
+      }
     })
   },
 
