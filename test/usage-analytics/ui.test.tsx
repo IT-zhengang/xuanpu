@@ -175,4 +175,84 @@ describe('usage analytics UI', () => {
       expect(fetchDashboardMock).toHaveBeenCalledTimes(2)
     })
   })
+
+  it('shows sync metadata and keeps resync manual when stale data is reported', async () => {
+    const user = userEvent.setup()
+    fetchDashboardMock.mockResolvedValue({
+      success: true,
+      data: {
+        filters: { range: '7d', engine: 'all' },
+        generated_at: '2026-04-09T12:00:00.000Z',
+        total_cost: 3.5,
+        total_tokens: 4200,
+        total_sessions: 1,
+        total_input_tokens: 2500,
+        total_output_tokens: 1200,
+        total_cache_write_tokens: 300,
+        total_cache_read_tokens: 200,
+        by_engine: [{ engine: 'codex', total_cost: 3.5, total_tokens: 4200, total_sessions: 1 }],
+        by_model: [],
+        by_project: [],
+        sessions: [
+          {
+            session_id: 'session-1',
+            session_name: 'Needs resync',
+            engine: 'codex',
+            project_id: 'project-1',
+            project_name: 'xuanpu',
+            project_path: '/tmp/xuanpu',
+            worktree_name: 'main',
+            model_label: 'gpt-5.4',
+            total_cost: 3.5,
+            total_tokens: 4200,
+            input_tokens: 2500,
+            output_tokens: 1200,
+            cache_write_tokens: 300,
+            cache_read_tokens: 200,
+            last_used_at: '2026-04-09T12:00:00.000Z',
+            started_at: '2026-04-09T11:00:00.000Z',
+            updated_at: '2026-04-09T12:00:00.000Z'
+          }
+        ],
+        timeline: [],
+        partial_sessions: [
+          {
+            session_id: 'session-2',
+            session_name: 'Partial session',
+            engine: 'claude-code',
+            reason: 'missing-source'
+          }
+        ],
+        sync: {
+          stale_session_count: 2,
+          partial_session_count: 1,
+          supported_session_count: 3,
+          last_resynced_at: '2026-04-09T12:00:00.000Z'
+        }
+      }
+    })
+    resyncMock.mockResolvedValue({
+      success: true,
+      synced_session_ids: ['session-1'],
+      partial_session_ids: []
+    })
+
+    render(<SettingsUsage />)
+
+    await waitFor(() => {
+      expect(fetchDashboardMock).toHaveBeenCalledTimes(1)
+    })
+
+    expect(resyncMock).not.toHaveBeenCalled()
+    expect(screen.getByTestId('usage-last-synced').textContent).toContain('Last synced:')
+    expect(screen.getByTestId('usage-partial-banner').textContent).toContain(
+      '2 sessions need a full resync'
+    )
+
+    await user.click(screen.getByTestId('usage-resync-button'))
+
+    await waitFor(() => {
+      expect(resyncMock).toHaveBeenCalledTimes(1)
+    })
+  })
 })

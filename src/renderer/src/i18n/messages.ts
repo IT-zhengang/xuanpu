@@ -310,7 +310,8 @@ export const messages: Record<AppLocale, MessageTree> = {
           totalCost: 'Total Cost',
           totalSessions: 'Sessions',
           totalTokens: 'Tokens',
-          averageCostPerSession: 'Avg Cost / Session'
+          averageCostPerSession: 'Avg Cost / Session',
+          lastSyncedAt: 'Last synced: {value}'
         },
         tokens: {
           input: 'Input Tokens',
@@ -340,7 +341,8 @@ export const messages: Record<AppLocale, MessageTree> = {
         },
         partial: {
           partialCount: '{count} sessions have incomplete analytics data.',
-          staleCount: '{count} sessions are being refreshed in the background.'
+          staleCount: '{count} sessions need a full resync to refresh historical analytics.',
+          resyncHint: 'Use Resync when historical usage looks outdated or incomplete.'
         },
         empty: 'No usage data available for the selected range.'
       }
@@ -2401,7 +2403,8 @@ export const messages: Record<AppLocale, MessageTree> = {
           totalCost: '总成本',
           totalSessions: '会话数',
           totalTokens: '总 Tokens',
-          averageCostPerSession: '平均成本 / 会话'
+          averageCostPerSession: '平均成本 / 会话',
+          lastSyncedAt: '最近同步：{value}'
         },
         tokens: {
           input: '输入 Tokens',
@@ -2431,7 +2434,8 @@ export const messages: Record<AppLocale, MessageTree> = {
         },
         partial: {
           partialCount: '有 {count} 个会话的统计数据还不完整。',
-          staleCount: '有 {count} 个会话正在后台刷新。'
+          staleCount: '有 {count} 个会话需要重新同步才能刷新历史统计。',
+          resyncHint: '如果历史使用数据看起来过期或不完整，请使用“重新同步”。'
         },
         empty: '当前筛选范围内还没有可用的使用数据。'
       }

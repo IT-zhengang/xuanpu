@@ -11,6 +11,11 @@ import {
 } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n/useI18n'
+import {
+  formatUsageCurrency,
+  formatUsageDurationSeconds,
+  formatUsageTokens
+} from '@/lib/usage-format'
 
 interface SessionCostPillProps {
   summary: UsageAnalyticsSessionSummary | null
@@ -24,30 +29,6 @@ interface SessionCostPillProps {
   modelId?: string | null
   providerId?: string | null
   variant?: 'default' | 'compact'
-}
-
-function formatCurrency(amount: number): string {
-  return `$${amount.toFixed(4)}`
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
-  return value.toLocaleString()
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = seconds % 60
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${secs}s`
-  }
-  return `${secs}s`
 }
 
 export function SessionCostPill({
@@ -111,7 +92,7 @@ export function SessionCostPill({
           {compact && displayCost <= 0 ? (
             <span>{t('sessionView.costPill.title')}</span>
           ) : (
-            <span className='font-mono'>{formatCurrency(displayCost)}</span>
+            <span className='font-mono'>{formatUsageCurrency(displayCost, 4)}</span>
           )}
           {showUnavailableHint && <CircleHelp className="h-3.5 w-3.5 text-amber-500" />}
           {summary?.partial && <TriangleAlert className="h-3.5 w-3.5 text-amber-500" />}
@@ -128,7 +109,7 @@ export function SessionCostPill({
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">{t('sessionView.costPill.totalCost')}</span>
             <span className='font-mono font-medium'>
-              {displayCost > 0 ? formatCurrency(displayCost) : '--'}
+              {displayCost > 0 ? formatUsageCurrency(displayCost, 4) : '--'}
             </span>
           </div>
           {hasEstimatedCost && (
@@ -143,27 +124,31 @@ export function SessionCostPill({
           )}
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">{t('sessionView.costPill.totalTokens')}</span>
-            <span className="font-mono">{formatTokens(totalTokens)}</span>
+            <span className="font-mono">{formatUsageTokens(totalTokens)}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 border-t border-border/70 pt-2">
             <div className="rounded-lg bg-muted/45 px-2 py-1.5">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 {t('sessionView.costPill.input')}
               </div>
-              <div className="mt-1 font-mono">{formatTokens(summary?.input_tokens ?? fallbackTokens?.input ?? 0)}</div>
+              <div className="mt-1 font-mono">
+                {formatUsageTokens(summary?.input_tokens ?? fallbackTokens?.input ?? 0)}
+              </div>
             </div>
             <div className="rounded-lg bg-muted/45 px-2 py-1.5">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 {t('sessionView.costPill.output')}
               </div>
-              <div className="mt-1 font-mono">{formatTokens(summary?.output_tokens ?? fallbackTokens?.output ?? 0)}</div>
+              <div className="mt-1 font-mono">
+                {formatUsageTokens(summary?.output_tokens ?? fallbackTokens?.output ?? 0)}
+              </div>
             </div>
             <div className="rounded-lg bg-muted/45 px-2 py-1.5">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 {t('sessionView.costPill.cacheWrite')}
               </div>
               <div className="mt-1 font-mono">
-                {formatTokens(summary?.cache_write_tokens ?? fallbackTokens?.cacheWrite ?? 0)}
+                {formatUsageTokens(summary?.cache_write_tokens ?? fallbackTokens?.cacheWrite ?? 0)}
               </div>
             </div>
             <div className="rounded-lg bg-muted/45 px-2 py-1.5">
@@ -171,7 +156,7 @@ export function SessionCostPill({
                 {t('sessionView.costPill.cacheRead')}
               </div>
               <div className="mt-1 font-mono">
-                {formatTokens(summary?.cache_read_tokens ?? fallbackTokens?.cacheRead ?? 0)}
+                {formatUsageTokens(summary?.cache_read_tokens ?? fallbackTokens?.cacheRead ?? 0)}
               </div>
             </div>
           </div>
@@ -192,7 +177,7 @@ export function SessionCostPill({
                 <Clock3 className="h-3.5 w-3.5" />
                 {t('sessionView.costPill.duration')}
               </span>
-              <span className="font-mono">{formatDuration(summary.duration_seconds)}</span>
+              <span className="font-mono">{formatUsageDurationSeconds(summary.duration_seconds)}</span>
             </div>
           )}
           {summary?.partial && (

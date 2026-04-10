@@ -1,27 +1,18 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo } from 'react'
 import { BarChart3, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/i18n/useI18n'
 import { useUsageAnalyticsStore } from '@/stores'
+import {
+  formatUsageCurrency,
+  formatUsageDateTime,
+  formatUsageTokens
+} from '@/lib/usage-format'
 
 const RANGE_OPTIONS = ['today', '7d', '30d', 'all'] as const
 const ENGINE_OPTIONS = ['all', 'claude-code', 'codex'] as const
 const TAB_OPTIONS = ['overview', 'models', 'projects', 'sessions', 'timeline'] as const
-
-function formatCurrency(amount: number): string {
-  return `$${amount.toFixed(2)}`
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
-  return value.toLocaleString()
-}
-
-function formatRelativeDate(value: string): string {
-  return new Date(value).toLocaleString()
-}
 
 export function SettingsUsage(): React.JSX.Element {
   const { t } = useI18n()
@@ -38,28 +29,18 @@ export function SettingsUsage(): React.JSX.Element {
     fetchDashboard,
     resyncAndRefresh
   } = useUsageAnalyticsStore()
-  const backgroundSyncedKeyRef = useRef<string | null>(null)
-
   useEffect(() => {
     void fetchDashboard()
   }, [filters.range, filters.engine, fetchDashboard])
-
-  useEffect(() => {
-    if (!dashboard || isResyncing) return
-    if (dashboard.sync.stale_session_count <= 0) return
-
-    const syncKey = `${dashboard.filters.range}:${dashboard.filters.engine}:${dashboard.generated_at}`
-    if (backgroundSyncedKeyRef.current === syncKey) return
-
-    backgroundSyncedKeyRef.current = syncKey
-    void resyncAndRefresh()
-  }, [dashboard, isResyncing, resyncAndRefresh])
 
   const topModels = useMemo(() => dashboard?.by_model.slice(0, 3) ?? [], [dashboard])
   const topProjects = useMemo(() => dashboard?.by_project.slice(0, 3) ?? [], [dashboard])
   const maxTimelineCost = useMemo(() => {
     return Math.max(...(dashboard?.timeline.map((row) => row.total_cost) ?? [0]), 0)
   }, [dashboard])
+  const lastSyncedLabel = dashboard?.sync.last_resynced_at
+    ? formatUsageDateTime(dashboard.sync.last_resynced_at)
+    : null
 
   return (
     <div className="space-y-6" data-testid="settings-usage">
@@ -67,6 +48,11 @@ export function SettingsUsage(): React.JSX.Element {
         <div>
           <h3 className="text-base font-medium mb-1">{t('settings.usage.title')}</h3>
           <p className="text-sm text-muted-foreground">{t('settings.usage.description')}</p>
+          {lastSyncedLabel && (
+            <p className="mt-2 text-xs text-muted-foreground" data-testid="usage-last-synced">
+              {t('settings.usage.summary.lastSyncedAt', { value: lastSyncedLabel })}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -171,6 +157,9 @@ export function SettingsUsage(): React.JSX.Element {
                   })}
                 </div>
               )}
+              <div className="pt-1 text-xs text-amber-700/90 dark:text-amber-200/90">
+                {t('settings.usage.partial.resyncHint')}
+              </div>
             </div>
           </div>
         </div>
@@ -185,7 +174,7 @@ export function SettingsUsage(): React.JSX.Element {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
               <div className="text-xs text-muted-foreground">{t('settings.usage.summary.totalCost')}</div>
-              <div className="mt-2 text-2xl font-semibold">{formatCurrency(dashboard.total_cost)}</div>
+              <div className="mt-2 text-2xl font-semibold">{formatUsageCurrency(dashboard.total_cost)}</div>
             </div>
             <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
               <div className="text-xs text-muted-foreground">{t('settings.usage.summary.totalSessions')}</div>
@@ -193,14 +182,14 @@ export function SettingsUsage(): React.JSX.Element {
             </div>
             <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
               <div className="text-xs text-muted-foreground">{t('settings.usage.summary.totalTokens')}</div>
-              <div className="mt-2 text-2xl font-semibold">{formatTokens(dashboard.total_tokens)}</div>
+              <div className="mt-2 text-2xl font-semibold">{formatUsageTokens(dashboard.total_tokens)}</div>
             </div>
             <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
               <div className="text-xs text-muted-foreground">
                 {t('settings.usage.summary.averageCostPerSession')}
               </div>
               <div className="mt-2 text-2xl font-semibold">
-                {formatCurrency(
+                {formatUsageCurrency(
                   dashboard.total_sessions > 0 ? dashboard.total_cost / dashboard.total_sessions : 0
                 )}
               </div>
@@ -217,7 +206,7 @@ export function SettingsUsage(): React.JSX.Element {
                 <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
                   <div>
                     <div className="text-muted-foreground">{t('settings.usage.summary.totalCost')}</div>
-                    <div className="mt-1 font-medium">{formatCurrency(engine.total_cost)}</div>
+                    <div className="mt-1 font-medium">{formatUsageCurrency(engine.total_cost)}</div>
                   </div>
                   <div>
                     <div className="text-muted-foreground">{t('settings.usage.summary.totalSessions')}</div>
@@ -225,7 +214,7 @@ export function SettingsUsage(): React.JSX.Element {
                   </div>
                   <div>
                     <div className="text-muted-foreground">{t('settings.usage.summary.totalTokens')}</div>
-                    <div className="mt-1 font-medium">{formatTokens(engine.total_tokens)}</div>
+                    <div className="mt-1 font-medium">{formatUsageTokens(engine.total_tokens)}</div>
                   </div>
                 </div>
               </div>
@@ -256,22 +245,22 @@ export function SettingsUsage(): React.JSX.Element {
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
                   <div className="text-xs text-muted-foreground">{t('settings.usage.tokens.input')}</div>
-                  <div className="mt-2 text-lg font-semibold">{formatTokens(dashboard.total_input_tokens)}</div>
+                  <div className="mt-2 text-lg font-semibold">{formatUsageTokens(dashboard.total_input_tokens)}</div>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
                   <div className="text-xs text-muted-foreground">{t('settings.usage.tokens.output')}</div>
-                  <div className="mt-2 text-lg font-semibold">{formatTokens(dashboard.total_output_tokens)}</div>
+                  <div className="mt-2 text-lg font-semibold">{formatUsageTokens(dashboard.total_output_tokens)}</div>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
                   <div className="text-xs text-muted-foreground">{t('settings.usage.tokens.cacheWrite')}</div>
                   <div className="mt-2 text-lg font-semibold">
-                    {formatTokens(dashboard.total_cache_write_tokens)}
+                    {formatUsageTokens(dashboard.total_cache_write_tokens)}
                   </div>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-background px-4 py-4">
                   <div className="text-xs text-muted-foreground">{t('settings.usage.tokens.cacheRead')}</div>
                   <div className="mt-2 text-lg font-semibold">
-                    {formatTokens(dashboard.total_cache_read_tokens)}
+                    {formatUsageTokens(dashboard.total_cache_read_tokens)}
                   </div>
                 </div>
               </div>
@@ -288,7 +277,7 @@ export function SettingsUsage(): React.JSX.Element {
                             {t(`settings.usage.engines.${row.engine}`)} · {row.session_count.toLocaleString()} sessions
                           </div>
                         </div>
-                        <div className="font-mono text-sm">{formatCurrency(row.total_cost)}</div>
+                        <div className="font-mono text-sm">{formatUsageCurrency(row.total_cost)}</div>
                       </div>
                     ))}
                   </div>
@@ -303,7 +292,7 @@ export function SettingsUsage(): React.JSX.Element {
                           <div className="truncate text-sm font-medium">{row.project_name}</div>
                           <div className="truncate text-xs text-muted-foreground">{row.project_path}</div>
                         </div>
-                        <div className="font-mono text-sm">{formatCurrency(row.total_cost)}</div>
+                        <div className="font-mono text-sm">{formatUsageCurrency(row.total_cost)}</div>
                       </div>
                     ))}
                   </div>
@@ -330,8 +319,8 @@ export function SettingsUsage(): React.JSX.Element {
                       </div>
                     </div>
                     <div>{row.session_count.toLocaleString()}</div>
-                    <div>{formatTokens(row.total_tokens)}</div>
-                    <div className="font-mono">{formatCurrency(row.total_cost)}</div>
+                    <div>{formatUsageTokens(row.total_tokens)}</div>
+                    <div className="font-mono">{formatUsageCurrency(row.total_cost)}</div>
                   </div>
                 ))}
               </div>
@@ -354,8 +343,8 @@ export function SettingsUsage(): React.JSX.Element {
                       <div className="truncate text-xs text-muted-foreground">{row.project_path}</div>
                     </div>
                     <div>{row.session_count.toLocaleString()}</div>
-                    <div>{formatTokens(row.total_tokens)}</div>
-                    <div className="font-mono">{formatCurrency(row.total_cost)}</div>
+                    <div>{formatUsageTokens(row.total_tokens)}</div>
+                    <div className="font-mono">{formatUsageCurrency(row.total_cost)}</div>
                   </div>
                 ))}
               </div>
@@ -381,9 +370,9 @@ export function SettingsUsage(): React.JSX.Element {
                       </div>
                     </div>
                     <div className="truncate">{row.model_label ?? '-'}</div>
-                    <div>{formatTokens(row.total_tokens)}</div>
-                    <div className="font-mono">{formatCurrency(row.total_cost)}</div>
-                    <div className="text-xs text-muted-foreground">{formatRelativeDate(row.last_used_at)}</div>
+                    <div>{formatUsageTokens(row.total_tokens)}</div>
+                    <div className="font-mono">{formatUsageCurrency(row.total_cost)}</div>
+                    <div className="text-xs text-muted-foreground">{formatUsageDateTime(row.last_used_at)}</div>
                   </div>
                 ))}
               </div>
@@ -404,7 +393,7 @@ export function SettingsUsage(): React.JSX.Element {
                         }}
                       />
                     </div>
-                    <div className="font-mono text-sm">{formatCurrency(row.total_cost)}</div>
+                    <div className="font-mono text-sm">{formatUsageCurrency(row.total_cost)}</div>
                     <div className="text-xs text-muted-foreground">
                       {row.total_sessions.toLocaleString()} sessions
                     </div>

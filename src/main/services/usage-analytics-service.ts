@@ -1,5 +1,5 @@
 import type { DatabaseService } from '../db/database'
-import type { Session } from '../db/types'
+import type { Session, UsageEntry, UsageSyncState } from '../db/types'
 import { readClaudeTranscriptUsage } from './claude-transcript-reader'
 import { createLogger } from './logger'
 import {
@@ -21,7 +21,6 @@ import type {
   UsageAnalyticsFilters,
   UsageAnalyticsPartialSession,
   UsageAnalyticsResyncResult,
-  UsageAnalyticsSessionRow,
   UsageAnalyticsSessionSummary,
   UsageAnalyticsSessionSummaryResult,
   UsageAnalyticsTimelineRow
@@ -42,6 +41,40 @@ interface SessionSyncSnapshot {
   partial: boolean
   reason?: UsageAnalyticsPartialSession['reason']
   detail?: string
+}
+
+interface UsageAggregateTotals {
+  total_cost: number
+  total_tokens: number
+  input_tokens: number
+  output_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+}
+
+interface SessionAggregate extends UsageAggregateTotals {
+  session_id: string
+  session_name: string
+  engine: UsageAnalyticsEngine
+  project_id: string
+  project_name: string
+  project_path: string
+  worktree_name: string | null
+  model_label: string | null
+  last_used_at: string | null
+  started_at: string
+  updated_at: string
+  duration_seconds: number
+  partial: boolean
+}
+
+interface AggregatedUsageSnapshot {
+  totals: UsageAggregateTotals
+  sessions: SessionAggregate[]
+  partial_sessions: UsageAnalyticsPartialSession[]
+  stale_session_count: number
+  supported_session_count: number
+  last_resynced_at: string | null
 }
 
 function startOfLocalDay(date: Date): Date {
@@ -95,28 +128,74 @@ function sumTokens(tokens: UsageTokenCounts): number {
   return tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead
 }
 
+function createEmptyTotals(): UsageAggregateTotals {
+  return {
+    total_cost: 0,
+    total_tokens: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_write_tokens: 0,
+    cache_read_tokens: 0
+  }
+}
+
+function addEntryToTotals(
+  totals: UsageAggregateTotals,
+  entry: {
+    cost: number
+    total_tokens: number
+    input_tokens: number
+    output_tokens: number
+    cache_write_tokens: number
+    cache_read_tokens: number
+  }
+): void {
+  totals.total_cost += entry.cost
+  totals.total_tokens += entry.total_tokens
+  totals.input_tokens += entry.input_tokens
+  totals.output_tokens += entry.output_tokens
+  totals.cache_write_tokens += entry.cache_write_tokens
+  totals.cache_read_tokens += entry.cache_read_tokens
+}
+
+function findLastResyncedAt(syncStates: Map<string, UsageSyncState | null | undefined>): string | null {
+  return (
+    Array.from(syncStates.values())
+      .map((state) => state?.last_synced_at ?? null)
+      .filter((value): value is string => !!value)
+      .sort((a, b) => b.localeCompare(a))[0] ?? null
+  )
+}
+
 export class UsageAnalyticsService {
   constructor(private readonly db: DatabaseService) {}
 
   async fetchDashboard(filters: UsageAnalyticsFilters): Promise<UsageAnalyticsDashboardResult> {
     try {
-      const sessions = this.db.getUsageAnalyticsSessions(['claude-code', 'codex'])
-      const syncStates = new Map(
-        this.db.getUsageSyncStates().map((state) => [state.session_id, state] as const)
-      )
       const engines = toSupportedAgentSdks(filters.engine)
       const { dateFrom, dateTo } = toRangeBounds(filters.range)
-      const entries = this.db.listUsageEntries({ agentSdks: engines, dateFrom, dateTo })
-      const sessionMap = new Map(sessions.map((session) => [session.id, session] as const))
+      const sessions = this.getSupportedSessions().filter((session) =>
+        engines.includes(session.agent_sdk as UsageAnalyticsEngine)
+      )
 
-      const totals = {
-        cost: 0,
-        tokens: 0,
-        input: 0,
-        output: 0,
-        cacheWrite: 0,
-        cacheRead: 0
+      await this.syncSessions(sessions, false)
+
+      const entries = this.db.listUsageEntries({ agentSdks: engines, dateFrom, dateTo })
+      const syncStates = this.getSupportedSyncStates()
+      const sessionMap = new Map(sessions.map((session) => [session.id, session] as const))
+      const sessionEntries = new Map<string, UsageEntry[]>()
+
+      for (const entry of entries) {
+        const bucket = sessionEntries.get(entry.session_id) ?? []
+        bucket.push(entry)
+        sessionEntries.set(entry.session_id, bucket)
       }
+
+      const snapshot = this.buildAggregatedSnapshot({
+        sessions,
+        sessionEntries,
+        syncStates
+      })
 
       const engineMap = new Map<
         UsageAnalyticsEngine,
@@ -150,24 +229,11 @@ export class UsageAnalyticsService {
           last_used_at: string
         }
       >()
-      const sessionRows = new Map<
-        string,
-        UsageAnalyticsSessionRow & {
-          sessionIds?: Set<string>
-        }
-      >()
       const timelineMap = new Map<string, UsageAnalyticsTimelineRow & { sessionIds: Set<string> }>()
 
       for (const entry of entries) {
         const session = sessionMap.get(entry.session_id)
         if (!session || !engines.includes(entry.agent_sdk)) continue
-
-        totals.cost += entry.cost
-        totals.tokens += entry.total_tokens
-        totals.input += entry.input_tokens
-        totals.output += entry.output_tokens
-        totals.cacheWrite += entry.cache_write_tokens
-        totals.cacheRead += entry.cache_read_tokens
 
         const engineBucket = engineMap.get(entry.agent_sdk) ?? {
           total_cost: 0,
@@ -201,7 +267,8 @@ export class UsageAnalyticsService {
         modelBucket.sessionIds.add(entry.session_id)
         modelMap.set(modelKey, modelBucket)
 
-        const projectKey = filters.engine === 'all' ? session.project_id : `${entry.agent_sdk}::${session.project_id}`
+        const projectKey =
+          filters.engine === 'all' ? session.project_id : `${entry.agent_sdk}::${session.project_id}`
         const projectBucket = projectMap.get(projectKey) ?? {
           engine: filters.engine === 'all' ? 'all' : entry.agent_sdk,
           project_id: session.project_id,
@@ -220,37 +287,6 @@ export class UsageAnalyticsService {
         }
         projectMap.set(projectKey, projectBucket)
 
-        const sessionBucket = sessionRows.get(entry.session_id) ?? {
-          session_id: entry.session_id,
-          session_name: session.name ?? 'Untitled',
-          engine: entry.agent_sdk,
-          project_id: session.project_id,
-          project_name: session.project_name,
-          project_path: session.project_path,
-          worktree_name: session.worktree_name,
-          model_label: entry.model_label ?? entry.model_id ?? null,
-          total_cost: 0,
-          total_tokens: 0,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_write_tokens: 0,
-          cache_read_tokens: 0,
-          last_used_at: entry.occurred_at,
-          started_at: session.created_at,
-          updated_at: session.updated_at
-        }
-        sessionBucket.total_cost += entry.cost
-        sessionBucket.total_tokens += entry.total_tokens
-        sessionBucket.input_tokens += entry.input_tokens
-        sessionBucket.output_tokens += entry.output_tokens
-        sessionBucket.cache_write_tokens += entry.cache_write_tokens
-        sessionBucket.cache_read_tokens += entry.cache_read_tokens
-        sessionBucket.model_label = entry.model_label ?? sessionBucket.model_label
-        if (entry.occurred_at > sessionBucket.last_used_at) {
-          sessionBucket.last_used_at = entry.occurred_at
-        }
-        sessionRows.set(entry.session_id, sessionBucket)
-
         const dateKey = formatDateKey(new Date(entry.occurred_at))
         const timelineBucket = timelineMap.get(dateKey) ?? {
           date: dateKey,
@@ -266,40 +302,16 @@ export class UsageAnalyticsService {
         timelineMap.set(dateKey, timelineBucket)
       }
 
-      const partialSessions: UsageAnalyticsPartialSession[] = []
-      let staleCount = 0
-
-      for (const session of sessions) {
-        if (!engines.includes(session.agent_sdk as UsageAnalyticsEngine)) continue
-        const snapshot = this.getSessionSyncSnapshot(session, syncStates.get(session.id))
-        if (snapshot.stale) staleCount += 1
-        if (snapshot.partial && snapshot.reason) {
-          partialSessions.push({
-            session_id: session.id,
-            session_name: session.name ?? 'Untitled',
-            engine: session.agent_sdk as UsageAnalyticsEngine,
-            reason: snapshot.reason,
-            ...(snapshot.detail ? { detail: snapshot.detail } : {})
-          })
-        }
-      }
-
-      const lastResyncedAt = this.db
-        .getUsageSyncStates()
-        .map((state) => state.last_synced_at)
-        .filter((value): value is string => !!value)
-        .sort((a, b) => b.localeCompare(a))[0] ?? null
-
       const dashboard: UsageAnalyticsDashboard = {
         filters,
         generated_at: new Date().toISOString(),
-        total_cost: totals.cost,
-        total_tokens: totals.tokens,
-        total_sessions: sessionRows.size,
-        total_input_tokens: totals.input,
-        total_output_tokens: totals.output,
-        total_cache_write_tokens: totals.cacheWrite,
-        total_cache_read_tokens: totals.cacheRead,
+        total_cost: snapshot.totals.total_cost,
+        total_tokens: snapshot.totals.total_tokens,
+        total_sessions: snapshot.sessions.length,
+        total_input_tokens: snapshot.totals.input_tokens,
+        total_output_tokens: snapshot.totals.output_tokens,
+        total_cache_write_tokens: snapshot.totals.cache_write_tokens,
+        total_cache_read_tokens: snapshot.totals.cache_read_tokens,
         by_engine: engines.map((engine) => {
           const bucket = engineMap.get(engine)
           return {
@@ -335,20 +347,20 @@ export class UsageAnalyticsService {
             last_used_at: bucket.last_used_at
           }))
           .sort((a, b) => b.total_cost - a.total_cost),
-        sessions: Array.from(sessionRows.values()).sort((a, b) =>
-          b.last_used_at.localeCompare(a.last_used_at)
-        ),
+        sessions: snapshot.sessions
+          .map(({ duration_seconds: _durationSeconds, partial: _partial, ...session }) => session)
+          .sort((a, b) => (b.last_used_at ?? b.updated_at).localeCompare(a.last_used_at ?? a.updated_at)),
         timeline: Array.from(timelineMap.values())
           .map(({ sessionIds: _sessionIds, ...bucket }) => bucket)
           .sort((a, b) => a.date.localeCompare(b.date)),
-        partial_sessions: partialSessions.sort((a, b) => a.session_name.localeCompare(b.session_name)),
+        partial_sessions: snapshot.partial_sessions.sort((a, b) =>
+          a.session_name.localeCompare(b.session_name)
+        ),
         sync: {
-          stale_session_count: staleCount,
-          partial_session_count: partialSessions.length,
-          supported_session_count: sessions.filter((session) =>
-            engines.includes(session.agent_sdk as UsageAnalyticsEngine)
-          ).length,
-          last_resynced_at: lastResyncedAt
+          stale_session_count: snapshot.stale_session_count,
+          partial_session_count: snapshot.partial_sessions.length,
+          supported_session_count: snapshot.supported_session_count,
+          last_resynced_at: snapshot.last_resynced_at
         }
       }
 
@@ -362,9 +374,7 @@ export class UsageAnalyticsService {
 
   async fetchSessionSummary(sessionId: string): Promise<UsageAnalyticsSessionSummaryResult> {
     try {
-      const session = this.db
-        .getUsageAnalyticsSessions(['claude-code', 'codex'])
-        .find((item) => item.id === sessionId)
+      const session = this.getSupportedSessions().find((item) => item.id === sessionId)
 
       if (!session) {
         return { success: false, error: 'Session not found or unsupported' }
@@ -372,38 +382,27 @@ export class UsageAnalyticsService {
 
       await this.syncSession(session, true)
 
-      const entries = this.db.getUsageEntriesBySession(sessionId)
-      const syncState = this.db.getUsageSyncState(sessionId)
+      const syncStates = this.getSupportedSyncStates()
+      const aggregate = this.buildSessionAggregate(
+        session,
+        this.db.getUsageEntriesBySession(session.id),
+        this.getSessionSyncSnapshot(session, syncStates.get(session.id))
+      )
 
       const summary: UsageAnalyticsSessionSummary = {
-        session_id: sessionId,
-        engine: session.agent_sdk as UsageAnalyticsEngine,
-        total_cost: 0,
-        total_tokens: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_write_tokens: 0,
-        cache_read_tokens: 0,
-        duration_seconds: 0,
-        last_used_at: entries.length > 0 ? entries[entries.length - 1].occurred_at : null,
-        latest_model_label: entries.length > 0 ? entries[entries.length - 1].model_label : null,
-        partial: syncState?.status === 'partial' || syncState?.status === 'error'
+        session_id: aggregate.session_id,
+        engine: aggregate.engine,
+        total_cost: aggregate.total_cost,
+        total_tokens: aggregate.total_tokens,
+        input_tokens: aggregate.input_tokens,
+        output_tokens: aggregate.output_tokens,
+        cache_write_tokens: aggregate.cache_write_tokens,
+        cache_read_tokens: aggregate.cache_read_tokens,
+        duration_seconds: aggregate.duration_seconds,
+        last_used_at: aggregate.last_used_at,
+        latest_model_label: aggregate.model_label,
+        partial: aggregate.partial
       }
-
-      for (const entry of entries) {
-        summary.total_cost += entry.cost
-        summary.total_tokens += entry.total_tokens
-        summary.input_tokens += entry.input_tokens
-        summary.output_tokens += entry.output_tokens
-        summary.cache_write_tokens += entry.cache_write_tokens
-        summary.cache_read_tokens += entry.cache_read_tokens
-      }
-
-      const endAt = summary.last_used_at ?? session.updated_at
-      summary.duration_seconds = Math.max(
-        0,
-        Math.round((new Date(endAt).getTime() - new Date(session.created_at).getTime()) / 1000)
-      )
 
       return { success: true, data: summary }
     } catch (error) {
@@ -414,32 +413,8 @@ export class UsageAnalyticsService {
   }
 
   async resync(): Promise<UsageAnalyticsResyncResult> {
-    const sessions = this.db.getUsageAnalyticsSessions(['claude-code', 'codex'])
-    const syncStates = new Map(
-      this.db.getUsageSyncStates().map((state) => [state.session_id, state] as const)
-    )
-
-    const staleSessions = sessions.filter((session) =>
-      this.getSessionSyncSnapshot(session, syncStates.get(session.id)).stale
-    )
-
-    const syncedSessionIds: string[] = []
-    const partialSessionIds: string[] = []
-
-    for (const session of staleSessions) {
-      const result = await this.syncSession(session, false)
-      if (result === 'partial') {
-        partialSessionIds.push(session.id)
-      } else if (result === 'synced') {
-        syncedSessionIds.push(session.id)
-      }
-    }
-
-    return {
-      success: true,
-      synced_session_ids: syncedSessionIds,
-      partial_session_ids: partialSessionIds
-    }
+    const sessions = this.getSupportedSessions()
+    return this.syncSessions(sessions, true)
   }
 
   private getSessionSyncSnapshot(
@@ -501,6 +476,127 @@ export class UsageAnalyticsService {
     return { stale: false, partial: false }
   }
 
+  private getSupportedSessions(): SupportedSession[] {
+    return this.db.getUsageAnalyticsSessions(['claude-code', 'codex'])
+  }
+
+  private getSupportedSyncStates(): Map<string, ReturnType<DatabaseService['getUsageSyncState']>> {
+    return new Map(this.db.getUsageSyncStates().map((state) => [state.session_id, state] as const))
+  }
+
+  private buildSessionAggregate(
+    session: SupportedSession,
+    entries: UsageEntry[],
+    syncSnapshot: SessionSyncSnapshot
+  ): SessionAggregate {
+    const totals = createEmptyTotals()
+    let lastUsedAt: string | null = null
+    let latestModelLabel: string | null = null
+
+    for (const entry of entries) {
+      addEntryToTotals(totals, entry)
+      lastUsedAt = entry.occurred_at
+      if (entry.model_label) {
+        latestModelLabel = entry.model_label
+      }
+    }
+
+    const endAt = lastUsedAt ?? session.updated_at
+
+    return {
+      session_id: session.id,
+      session_name: session.name ?? 'Untitled',
+      engine: session.agent_sdk as UsageAnalyticsEngine,
+      project_id: session.project_id,
+      project_name: session.project_name,
+      project_path: session.project_path,
+      worktree_name: session.worktree_name,
+      model_label: latestModelLabel,
+      last_used_at: lastUsedAt,
+      started_at: session.created_at,
+      updated_at: session.updated_at,
+      duration_seconds: Math.max(
+        0,
+        Math.round((new Date(endAt).getTime() - new Date(session.created_at).getTime()) / 1000)
+      ),
+      partial: syncSnapshot.partial,
+      ...totals
+    }
+  }
+
+  private buildAggregatedSnapshot(filters: {
+    sessions: SupportedSession[]
+    sessionEntries: Map<string, UsageEntry[]>
+    syncStates: Map<string, UsageSyncState | null | undefined>
+  }): AggregatedUsageSnapshot {
+    const totals = createEmptyTotals()
+    const aggregatedSessions: SessionAggregate[] = []
+    const partialSessions: UsageAnalyticsPartialSession[] = []
+    let staleCount = 0
+
+    for (const session of filters.sessions) {
+      const syncSnapshot = this.getSessionSyncSnapshot(session, filters.syncStates.get(session.id))
+      if (syncSnapshot.stale) staleCount += 1
+      if (syncSnapshot.partial && syncSnapshot.reason) {
+        partialSessions.push({
+          session_id: session.id,
+          session_name: session.name ?? 'Untitled',
+          engine: session.agent_sdk as UsageAnalyticsEngine,
+          reason: syncSnapshot.reason,
+          ...(syncSnapshot.detail ? { detail: syncSnapshot.detail } : {})
+        })
+      }
+
+      const entries = filters.sessionEntries.get(session.id) ?? []
+      if (entries.length === 0) continue
+
+      const aggregate = this.buildSessionAggregate(session, entries, syncSnapshot)
+      if (aggregate.total_tokens <= 0 && aggregate.total_cost <= 0) continue
+
+      aggregatedSessions.push(aggregate)
+      addEntryToTotals(totals, {
+        cost: aggregate.total_cost,
+        total_tokens: aggregate.total_tokens,
+        input_tokens: aggregate.input_tokens,
+        output_tokens: aggregate.output_tokens,
+        cache_write_tokens: aggregate.cache_write_tokens,
+        cache_read_tokens: aggregate.cache_read_tokens
+      })
+    }
+
+    return {
+      totals,
+      sessions: aggregatedSessions,
+      partial_sessions: partialSessions,
+      stale_session_count: staleCount,
+      supported_session_count: filters.sessions.length,
+      last_resynced_at: findLastResyncedAt(filters.syncStates)
+    }
+  }
+
+  private async syncSessions(
+    sessions: SupportedSession[],
+    force: boolean
+  ): Promise<UsageAnalyticsResyncResult> {
+    const syncedSessionIds: string[] = []
+    const partialSessionIds: string[] = []
+
+    for (const session of sessions) {
+      const result = await this.syncSession(session, force)
+      if (result === 'partial') {
+        partialSessionIds.push(session.id)
+      } else if (result === 'synced') {
+        syncedSessionIds.push(session.id)
+      }
+    }
+
+    return {
+      success: true,
+      synced_session_ids: syncedSessionIds,
+      partial_session_ids: partialSessionIds
+    }
+  }
+
   private async syncSession(
     session: SupportedSession,
     force: boolean
@@ -511,11 +607,35 @@ export class UsageAnalyticsService {
       if (!snapshot.stale) return 'skipped'
     }
 
-    if (session.agent_sdk === 'claude-code') {
-      return this.syncClaudeSession(session)
-    }
+    try {
+      if (session.agent_sdk === 'claude-code') {
+        return await this.syncClaudeSession(session)
+      }
 
-    return this.syncCodexSession(session)
+      return await this.syncCodexSession(session)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.recordSyncError(session, message)
+      log.warn('Failed to sync usage analytics session', {
+        sessionId: session.id,
+        agentSdk: session.agent_sdk,
+        error: message
+      })
+      return 'partial'
+    }
+  }
+
+  private recordSyncError(session: SupportedSession, errorMessage: string): void {
+    this.db.upsertUsageSyncState({
+      session_id: session.id,
+      agent_sdk: session.agent_sdk as UsageAnalyticsEngine,
+      source_kind: session.agent_sdk === 'claude-code' ? 'claude-transcript' : 'codex-message',
+      source_ref: session.opencode_session_id ?? session.id,
+      status: 'error',
+      entry_count: this.db.getUsageEntriesBySession(session.id).length,
+      last_synced_at: new Date().toISOString(),
+      last_error: errorMessage
+    })
   }
 
   private async syncClaudeSession(session: SupportedSession): Promise<'synced' | 'partial'> {

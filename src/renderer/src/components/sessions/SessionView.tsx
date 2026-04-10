@@ -40,15 +40,11 @@ import type { FlatFile } from '@/lib/file-search-utils'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useWorktreeStatusStore } from '@/stores/useWorktreeStatusStore'
 import { useContextStore } from '@/stores/useContextStore'
-import type { TokenInfo, SessionModelRef } from '@/stores/useContextStore'
+import { extractSelectedModel } from '@/lib/token-utils'
 import {
-  extractTokens,
-  extractCost,
-  extractModelRef,
-  extractSelectedModel,
-  extractModelUsage,
-  extractMessageUsageId
-} from '@/lib/token-utils'
+  buildSessionUsageSnapshot,
+  extractCompletedSessionUsageUpdate
+} from '@/lib/session-usage'
 import { useSettingsStore, resolveModelForSdk } from '@/stores/useSettingsStore'
 import type { SelectedModel } from '@/stores/useSettingsStore'
 import { useQuestionStore } from '@/stores/useQuestionStore'
@@ -1713,9 +1709,7 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             loadedMessages = mapOpencodeMessagesToSessionViewMessages(opencodeMessages)
           }
 
-          let totalCost = 0
-          let snapshotTokens: TokenInfo | null = null
-          let snapshotModelRef: SessionModelRef | undefined
+          const usageSnapshot = buildSessionUsageSnapshot(opencodeMessages)
           let latestUserModel: SelectedModel | null = null
 
           for (let i = opencodeMessages.length - 1; i >= 0; i--) {
@@ -1731,25 +1725,19 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             }
 
             if (role !== 'assistant') continue
-
-            totalCost += extractCost(messageRecord)
-
-            if (!snapshotTokens) {
-              const tokens = extractTokens(messageRecord)
-              if (tokens) {
-                snapshotTokens = tokens
-                snapshotModelRef = extractModelRef(messageRecord) ?? undefined
-              }
-            }
           }
 
-          useContextStore.getState().resetSessionTokens(sessionId)
-          if (snapshotTokens) {
+          useContextStore.getState().replaceSessionUsage(sessionId, {
+            cost: usageSnapshot.totalCost,
+            tokens: usageSnapshot.tokens,
+            model: usageSnapshot.modelRef
+          })
+          for (const entry of usageSnapshot.modelLimits) {
             useContextStore
               .getState()
-              .setSessionTokens(sessionId, snapshotTokens, snapshotModelRef)
+              .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
+            useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
           }
-          useContextStore.getState().setSessionCost(sessionId, totalCost)
 
           if (!sessionModelHydratedRef.current && latestUserModel) {
             sessionModelHydratedRef.current = true
@@ -2707,29 +2695,25 @@ export function SessionView({ sessionId }: SessionViewProps): React.JSX.Element 
             if (info?.time?.completed) {
               const data = event.data as Record<string, unknown> | undefined
               if (data) {
-                const messageUsageId = extractMessageUsageId(data)
-                if (!markMessageUsageApplied(messageUsageId)) return
+                const usageUpdate = extractCompletedSessionUsageUpdate(data)
+                if (!usageUpdate) return
+                if (!markMessageUsageApplied(usageUpdate.usageMessageId)) return
 
-                const tokens = extractTokens(data)
-                if (tokens) {
-                  const modelRef = extractModelRef(data) ?? undefined
-                  useContextStore.getState().setSessionTokens(sessionId, tokens, modelRef)
-                }
-                const cost = extractCost(data)
-                if (cost > 0) {
-                  useContextStore.getState().addSessionCost(sessionId, cost)
-                }
-                // Extract per-model usage (from SDK result messages) to update context limits
-                const modelUsageEntries = extractModelUsage(data)
-                if (modelUsageEntries) {
-                  for (const entry of modelUsageEntries) {
-                    if (entry.contextWindow > 0) {
-                      useContextStore
-                        .getState()
-                        .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
-                      useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
-                    }
-                  }
+                useContextStore.getState().applySessionUsageUpdate(sessionId, {
+                  cost: usageUpdate.cost > 0 ? usageUpdate.cost : undefined,
+                  ...(usageUpdate.tokens
+                    ? {
+                        tokens: usageUpdate.tokens,
+                        model: usageUpdate.modelRef
+                      }
+                    : {})
+                })
+
+                for (const entry of usageUpdate.modelLimits) {
+                  useContextStore
+                    .getState()
+                    .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
+                  useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
                 }
               }
             }

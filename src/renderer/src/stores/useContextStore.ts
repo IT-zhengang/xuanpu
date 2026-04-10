@@ -38,6 +38,14 @@ interface ContextState {
   setSessionTokens: (sessionId: string, tokens: TokenInfo, model?: SessionModelRef) => void
   addSessionCost: (sessionId: string, cost: number) => void
   setSessionCost: (sessionId: string, cost: number) => void
+  replaceSessionUsage: (
+    sessionId: string,
+    usage: { cost: number; tokens?: TokenInfo | null; model?: SessionModelRef }
+  ) => void
+  applySessionUsageUpdate: (
+    sessionId: string,
+    update: { cost?: number; tokens?: TokenInfo | null; model?: SessionModelRef }
+  ) => void
   resetSessionTokens: (sessionId: string) => void
   clearSessionTokenSnapshot: (sessionId: string) => void
   setModelLimit: (modelId: string, limit: number, providerID?: string) => void
@@ -97,6 +105,62 @@ export const useContextStore = create<ContextState>()((set, get) => ({
         [sessionId]: cost
       }
     }))
+  },
+
+  replaceSessionUsage: (sessionId: string, usage) => {
+    set((state) => {
+      const nextTokens = { ...state.tokensBySession }
+      const nextModels = { ...state.modelBySession }
+
+      if (usage.tokens) {
+        nextTokens[sessionId] = { ...usage.tokens }
+        if (usage.model) {
+          nextModels[sessionId] = usage.model
+        } else {
+          delete nextModels[sessionId]
+        }
+      } else {
+        delete nextTokens[sessionId]
+        delete nextModels[sessionId]
+      }
+
+      return {
+        tokensBySession: nextTokens,
+        modelBySession: nextModels,
+        costBySession: {
+          ...state.costBySession,
+          [sessionId]: usage.cost
+        }
+      }
+    })
+  },
+
+  applySessionUsageUpdate: (sessionId: string, update) => {
+    set((state) => {
+      const nextTokens = { ...state.tokensBySession }
+      const nextModels = { ...state.modelBySession }
+
+      if (update.tokens) {
+        nextTokens[sessionId] = { ...update.tokens }
+        if (update.model) {
+          nextModels[sessionId] = update.model
+        } else {
+          delete nextModels[sessionId]
+        }
+      }
+
+      return {
+        tokensBySession: nextTokens,
+        modelBySession: nextModels,
+        costBySession:
+          typeof update.cost === 'number'
+            ? {
+                ...state.costBySession,
+                [sessionId]: (state.costBySession[sessionId] ?? 0) + update.cost
+              }
+            : state.costBySession
+      }
+    })
   },
 
   resetSessionTokens: (sessionId: string) => {

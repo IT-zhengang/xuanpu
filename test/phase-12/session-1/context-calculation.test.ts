@@ -7,6 +7,10 @@ import {
   extractModelRef,
   extractModelUsage
 } from '../../../src/renderer/src/lib/token-utils'
+import {
+  buildSessionUsageSnapshot,
+  extractCompletedSessionUsageUpdate
+} from '../../../src/renderer/src/lib/session-usage'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -172,6 +176,90 @@ describe('Session 1: Context Calculation Fix', () => {
         store.setSessionCost('s1', 0.02)
       })
       expect(useContextStore.getState().costBySession['s1']).toBeCloseTo(0.02)
+    })
+
+
+    test('replaceSessionUsage atomically swaps billing snapshot', () => {
+      const store = useContextStore.getState()
+
+      act(() => {
+        store.setSessionTokens(
+          's1',
+          {
+            input: 10,
+            output: 5,
+            reasoning: 0,
+            cacheRead: 1,
+            cacheWrite: 2
+          },
+          {
+            providerID: 'openai',
+            modelID: 'gpt-5.4'
+          }
+        )
+        store.setSessionCost('s1', 0.01)
+      })
+
+      act(() => {
+        store.replaceSessionUsage('s1', {
+          cost: 0.02,
+          tokens: {
+            input: 20,
+            output: 10,
+            reasoning: 0,
+            cacheRead: 3,
+            cacheWrite: 4
+          },
+          model: {
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet-4-5-20250929'
+          }
+        })
+      })
+
+      expect(useContextStore.getState().costBySession['s1']).toBeCloseTo(0.02)
+      expect(useContextStore.getState().tokensBySession['s1']).toEqual({
+        input: 20,
+        output: 10,
+        reasoning: 0,
+        cacheRead: 3,
+        cacheWrite: 4
+      })
+      expect(useContextStore.getState().modelBySession['s1']).toEqual({
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet-4-5-20250929'
+      })
+    })
+
+    test('applySessionUsageUpdate accumulates cost and refreshes snapshot tokens', () => {
+      const store = useContextStore.getState()
+
+      act(() => {
+        store.setSessionCost('s1', 0.01)
+        store.applySessionUsageUpdate('s1', {
+          cost: 0.005,
+          tokens: {
+            input: 30,
+            output: 12,
+            reasoning: 0,
+            cacheRead: 6,
+            cacheWrite: 3
+          },
+          model: {
+            providerID: 'openai',
+            modelID: 'gpt-5.4'
+          }
+        })
+      })
+
+      expect(useContextStore.getState().costBySession['s1']).toBeCloseTo(0.015)
+      expect(useContextStore.getState().tokensBySession['s1']).toEqual({
+        input: 30,
+        output: 12,
+        reasoning: 0,
+        cacheRead: 6,
+        cacheWrite: 3
+      })
     })
 
     test('usage percent is 0 when no limit set', () => {
@@ -489,6 +577,95 @@ describe('Session 1: Context Calculation Fix', () => {
           contextWindow: 258400
         }
       ])
+    })
+  })
+})
+
+
+describe('session usage helpers', () => {
+  test('buildSessionUsageSnapshot derives total cost, latest snapshot and model limits', () => {
+    const snapshot = buildSessionUsageSnapshot([
+      {
+        role: 'assistant',
+        cost: 0.01,
+        tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5 },
+        model: 'codex/gpt-5.4',
+        modelUsage: {
+          'gpt-5.4': {
+            providerID: 'openai',
+            contextWindow: 128000,
+            inputTokens: 100,
+            outputTokens: 40,
+            cacheReadInputTokens: 10,
+            cacheCreationInputTokens: 5,
+            costUSD: 0.01
+          }
+        }
+      },
+      {
+        role: 'assistant',
+        cost: 0.02,
+        tokens: { input: 200, output: 60, cacheRead: 20, cacheWrite: 10 },
+        model: 'codex/gpt-5.4'
+      }
+    ])
+
+    expect(snapshot.totalCost).toBeCloseTo(0.03)
+    expect(snapshot.tokens).toEqual({
+      input: 200,
+      output: 60,
+      reasoning: 0,
+      cacheRead: 20,
+      cacheWrite: 10
+    })
+    expect(snapshot.modelRef).toEqual({
+      providerID: 'codex',
+      modelID: 'gpt-5.4'
+    })
+    expect(snapshot.modelLimits).toEqual([
+      {
+        modelID: 'gpt-5.4',
+        providerID: 'openai',
+        contextWindow: 128000
+      }
+    ])
+  })
+
+  test('extractCompletedSessionUsageUpdate ignores incomplete messages and parses completed ones', () => {
+    expect(
+      extractCompletedSessionUsageUpdate({
+        info: { time: { created: Date.now() } },
+        cost: 0.02,
+        tokens: { input: 100, output: 50 }
+      })
+    ).toBeNull()
+
+    const update = extractCompletedSessionUsageUpdate({
+      id: 'assistant-1',
+      info: {
+        time: { completed: Date.now() },
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet-4-5-20250929'
+      },
+      cost: 0.02,
+      tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5 }
+    })
+
+    expect(update).toEqual({
+      usageMessageId: 'assistant-1',
+      cost: 0.02,
+      tokens: {
+        input: 100,
+        output: 50,
+        reasoning: 0,
+        cacheRead: 10,
+        cacheWrite: 5
+      },
+      modelRef: {
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet-4-5-20250929'
+      },
+      modelLimits: []
     })
   })
 })

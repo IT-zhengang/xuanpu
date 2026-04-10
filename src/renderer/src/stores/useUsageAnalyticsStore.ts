@@ -48,13 +48,15 @@ export const useUsageAnalyticsStore = create<UsageAnalyticsState>()((set, get) =
 
   setRange: (range) => {
     set((state) => ({
-      filters: { ...state.filters, range }
+      filters: { ...state.filters, range },
+      error: null
     }))
   },
 
   setEngine: (engine) => {
     set((state) => ({
-      filters: { ...state.filters, engine }
+      filters: { ...state.filters, engine },
+      error: null
     }))
   },
 
@@ -105,10 +107,17 @@ export const useUsageAnalyticsStore = create<UsageAnalyticsState>()((set, get) =
   resyncAndRefresh: async () => {
     if (get().isResyncing) return
 
-    set({ isResyncing: true })
+    set({ isResyncing: true, error: null })
     try {
-      await window.usageAnalyticsOps.resync()
+      const result = await window.usageAnalyticsOps.resync()
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to resync usage analytics')
+      }
       await get().fetchDashboard({ force: true })
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : String(error)
+      })
     } finally {
       set({ isResyncing: false })
     }

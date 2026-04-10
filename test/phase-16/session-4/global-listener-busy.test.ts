@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from 'vitest'
 import { renderHook, cleanup } from '@testing-library/react'
 import { useAgentGlobalListener } from '@/hooks/useAgentGlobalListener'
-import { extractTokens, extractCost, extractModelRef, extractMessageUsageId } from '@/lib/token-utils'
+import { extractCompletedSessionUsageUpdate } from '@/lib/session-usage'
 
 /**
  * Session 4: Global Listener Busy Handling — Tests
@@ -98,6 +98,7 @@ vi.mock('@/stores/useRecentStore', () => ({
 // Mock useContextStore (imported by the listener)
 const setSessionTokensSpy = vi.fn()
 const addSessionCostSpy = vi.fn()
+const applySessionUsageUpdateSpy = vi.fn()
 const setModelLimitSpy = vi.fn()
 
 vi.mock('@/stores/useContextStore', () => ({
@@ -105,24 +106,17 @@ vi.mock('@/stores/useContextStore', () => ({
     getState: () => ({
       setSessionTokens: setSessionTokensSpy,
       addSessionCost: addSessionCostSpy,
+      applySessionUsageUpdate: applySessionUsageUpdateSpy,
       setModelLimit: setModelLimitSpy
     })
   }
 }))
 
-// Mock extractTokens, extractCost, extractModelRef
-vi.mock('@/lib/token-utils', () => ({
-  extractTokens: vi.fn(() => null),
-  extractCost: vi.fn(() => 0),
-  extractModelRef: vi.fn(() => null),
-  extractMessageUsageId: vi.fn(() => null),
-  extractModelUsage: vi.fn(() => null)
+vi.mock('@/lib/session-usage', () => ({
+  extractCompletedSessionUsageUpdate: vi.fn(() => null)
 }))
 
-const extractTokensMock = vi.mocked(extractTokens)
-const extractCostMock = vi.mocked(extractCost)
-const extractModelRefMock = vi.mocked(extractModelRef)
-const extractMessageUsageIdMock = vi.mocked(extractMessageUsageId)
+const extractCompletedSessionUsageUpdateMock = vi.mocked(extractCompletedSessionUsageUpdate)
 
 // Spies for stores we want to verify
 const setSessionStatusSpy = vi.fn()
@@ -166,10 +160,7 @@ describe('Session 4: Global Listener Busy Handling', () => {
     streamCallback = null
     // Default mode is 'build'
     getSessionModeSpy.mockReturnValue('build')
-    extractTokensMock.mockReturnValue(null)
-    extractCostMock.mockReturnValue(0)
-    extractModelRefMock.mockReturnValue(null)
-    extractMessageUsageIdMock.mockReturnValue(null)
+    extractCompletedSessionUsageUpdateMock.mockReturnValue(null)
   })
 
   afterEach(() => {
@@ -314,12 +305,12 @@ describe('Session 4: Global Listener Busy Handling', () => {
   test('message.updated from child session does not update context tokens', () => {
     const cb = mountListenerAndGetCallback()
 
-    extractTokensMock.mockReturnValue({
-      input: 500,
-      output: 200,
-      reasoning: 50,
-      cacheRead: 0,
-      cacheWrite: 0
+    extractCompletedSessionUsageUpdateMock.mockReturnValue({
+      usageMessageId: 'child-msg-1',
+      cost: 0.01,
+      tokens: { input: 500, output: 200, reasoning: 50, cacheRead: 0, cacheWrite: 0 },
+      modelRef: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5-20250929' },
+      modelLimits: []
     })
 
     cb({
@@ -339,18 +330,21 @@ describe('Session 4: Global Listener Busy Handling', () => {
   test('duplicate completed background message.updated does not add cost twice', () => {
     const cb = mountListenerAndGetCallback()
 
-    extractMessageUsageIdMock.mockReturnValue('assistant-msg-1')
-    extractTokensMock.mockReturnValue({
-      input: 500,
-      output: 200,
-      reasoning: 50,
-      cacheRead: 25,
-      cacheWrite: 10
-    })
-    extractCostMock.mockReturnValue(0.015)
-    extractModelRefMock.mockReturnValue({
-      providerID: 'anthropic',
-      modelID: 'claude-sonnet-4-5-20250929'
+    extractCompletedSessionUsageUpdateMock.mockReturnValue({
+      usageMessageId: 'assistant-msg-1',
+      cost: 0.015,
+      tokens: {
+        input: 500,
+        output: 200,
+        reasoning: 50,
+        cacheRead: 25,
+        cacheWrite: 10
+      },
+      modelRef: {
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet-4-5-20250929'
+      },
+      modelLimits: []
     })
 
     const event = {
@@ -366,8 +360,11 @@ describe('Session 4: Global Listener Busy Handling', () => {
     cb(event)
     cb(event)
 
-    expect(setSessionTokensSpy).toHaveBeenCalledTimes(1)
-    expect(addSessionCostSpy).toHaveBeenCalledTimes(1)
-    expect(addSessionCostSpy).toHaveBeenCalledWith('session-B', 0.015)
+    expect(applySessionUsageUpdateSpy).toHaveBeenCalledTimes(1)
+    expect(applySessionUsageUpdateSpy).toHaveBeenCalledWith('session-B', {
+      cost: 0.015,
+      tokens: { input: 500, output: 200, reasoning: 50, cacheRead: 25, cacheWrite: 10 },
+      model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5-20250929' }
+    })
   })
 })

@@ -10,13 +10,7 @@ import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useContextStore, type TokenInfo, type SessionModelRef } from '@/stores/useContextStore'
 import { useRecentStore } from '@/stores/useRecentStore'
 import { useUsageStore, resolveUsageProvider } from '@/stores'
-import {
-  extractTokens,
-  extractCost,
-  extractModelRef,
-  extractModelUsage,
-  extractMessageUsageId
-} from '@/lib/token-utils'
+import { extractCompletedSessionUsageUpdate } from '@/lib/session-usage'
 import { COMPLETION_WORDS } from '@/lib/format-utils'
 import { messageSendTimes } from '@/lib/message-send-times'
 import { checkAutoApprove } from '@/lib/permissionUtils'
@@ -256,33 +250,32 @@ export function useAgentGlobalListener(): void {
             if (info?.time?.completed) {
               const data = event.data as Record<string, unknown> | undefined
               if (data) {
-                const messageUsageId = extractMessageUsageId(data)
-                const dedupeKey = messageUsageId ? `${sessionId}:${messageUsageId}` : null
+                const usageUpdate = extractCompletedSessionUsageUpdate(data)
+                if (!usageUpdate) return
+
+                const dedupeKey = usageUpdate.usageMessageId
+                  ? `${sessionId}:${usageUpdate.usageMessageId}`
+                  : null
                 if (dedupeKey) {
                   if (processedUsageMessageIdsRef.current.has(dedupeKey)) return
                   processedUsageMessageIdsRef.current.add(dedupeKey)
                 }
 
-                const tokens = extractTokens(data)
-                if (tokens) {
-                  const modelRef = extractModelRef(data) ?? undefined
-                  useContextStore.getState().setSessionTokens(sessionId, tokens, modelRef)
-                }
-                const cost = extractCost(data)
-                if (cost > 0) {
-                  useContextStore.getState().addSessionCost(sessionId, cost)
-                }
-                // Extract per-model usage (from SDK result messages) to update context limits
-                const modelUsageEntries = extractModelUsage(data)
-                if (modelUsageEntries) {
-                  for (const entry of modelUsageEntries) {
-                    if (entry.contextWindow > 0) {
-                      useContextStore
-                        .getState()
-                        .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
-                      useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
-                    }
-                  }
+                useContextStore.getState().applySessionUsageUpdate(sessionId, {
+                  cost: usageUpdate.cost > 0 ? usageUpdate.cost : undefined,
+                  ...(usageUpdate.tokens
+                    ? {
+                        tokens: usageUpdate.tokens,
+                        model: usageUpdate.modelRef
+                      }
+                    : {})
+                })
+
+                for (const entry of usageUpdate.modelLimits) {
+                  useContextStore
+                    .getState()
+                    .setModelLimit(entry.modelID, entry.contextWindow, entry.providerID)
+                  useContextStore.getState().setModelLimit(entry.modelID, entry.contextWindow)
                 }
               }
             }
