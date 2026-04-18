@@ -493,10 +493,18 @@ export class UsageAnalyticsService {
     let lastUsedAt: string | null = null
     let latestModelLabel: string | null = null
 
+    // NOTE: entries may arrive in either ASC (per-session lookup) or DESC
+    // (dashboard's listUsageEntries) order. Always pick the entry with the
+    // greatest occurred_at as the source of truth for last_used_at and the
+    // latest model label, instead of relying on iteration order.
     for (const entry of entries) {
       addEntryToTotals(totals, entry)
-      lastUsedAt = entry.occurred_at
-      if (entry.model_label) {
+      if (lastUsedAt === null || entry.occurred_at > lastUsedAt) {
+        lastUsedAt = entry.occurred_at
+        if (entry.model_label) {
+          latestModelLabel = entry.model_label
+        }
+      } else if (latestModelLabel === null && entry.model_label) {
         latestModelLabel = entry.model_label
       }
     }
@@ -604,7 +612,21 @@ export class UsageAnalyticsService {
     const syncState = this.db.getUsageSyncState(session.id)
     if (!force) {
       const snapshot = this.getSessionSyncSnapshot(session, syncState)
-      if (!snapshot.stale) return 'skipped'
+      // A session may report `partial`/`error` even though `stale === false`,
+      // because the snapshot doubles as the UI status. We still need to retry
+      // those cases on the next dashboard fetch — otherwise a single transient
+      // failure (e.g. transcript file not flushed yet, fresh codex message
+      // partially persisted) leaves the session permanently empty until the
+      // user clicks Resync. We intentionally skip "data inherently missing"
+      // partials (no worktree path / no opencode session id) since retrying
+      // those would just reload transcripts for nothing.
+      const isInherentlyPartial =
+        session.agent_sdk === 'claude-code' &&
+        (!session.worktree_path || !session.opencode_session_id)
+      const shouldRetryPartial =
+        !isInherentlyPartial &&
+        (syncState?.status === 'error' || syncState?.status === 'partial')
+      if (!snapshot.stale && !shouldRetryPartial) return 'skipped'
     }
 
     try {

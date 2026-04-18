@@ -455,6 +455,123 @@ describeDb('UsageAnalyticsService', () => {
     expect(dashboard.data?.sessions[0].total_cost).toBeCloseTo(0.1, 10)
     expect(dashboard.data?.sessions[0].total_tokens).toBe(600)
   })
+
+  it('reports the most recent occurred_at and model label regardless of entry order', async () => {
+    const project = db.createProject({ name: 'Order Project', path: '/tmp/order-project' })
+    const worktree = db.createWorktree({
+      project_id: project.id,
+      path: '/tmp/order-project',
+      name: 'main',
+      branch_name: 'main',
+      is_default: true
+    })
+    const session = db.createSession({
+      worktree_id: worktree.id,
+      project_id: project.id,
+      name: 'Order session',
+      opencode_session_id: 'codex-order',
+      agent_sdk: 'codex',
+      model_provider_id: 'codex',
+      model_id: 'gpt-5.4'
+    })
+
+    db.createSessionMessage({
+      session_id: session.id,
+      role: 'assistant',
+      content: 'older',
+      opencode_message_id: 'msg-older',
+      opencode_message_json: JSON.stringify({
+        id: 'msg-older',
+        timestamp: '2026-04-01T08:00:00.000Z',
+        cost: 0.05,
+        tokens: { input: 500, output: 100, cacheRead: 0, cacheWrite: 0 },
+        model: 'codex/gpt-5.3-codex'
+      }),
+      created_at: '2026-04-01T08:00:00.000Z'
+    })
+
+    db.createSessionMessage({
+      session_id: session.id,
+      role: 'assistant',
+      content: 'newer',
+      opencode_message_id: 'msg-newer',
+      opencode_message_json: JSON.stringify({
+        id: 'msg-newer',
+        timestamp: '2026-04-09T08:00:00.000Z',
+        cost: 0.07,
+        tokens: { input: 700, output: 200, cacheRead: 0, cacheWrite: 0 },
+        model: 'codex/gpt-5.4'
+      }),
+      created_at: '2026-04-09T08:00:00.000Z'
+    })
+
+    await service.resync()
+
+    // Dashboard's listUsageEntries returns DESC; the previous bug picked the
+    // earliest entry as `last_used_at` / `model_label`. Both should reflect
+    // the latest entry now.
+    const dashboard = await service.fetchDashboard({ range: 'all', engine: 'all' })
+    const row = dashboard.data?.sessions.find((item) => item.session_id === session.id)
+    expect(row?.last_used_at).toBe('2026-04-09T08:00:00.000Z')
+    expect(row?.model_label).toBe('codex/gpt-5.4')
+
+    const summary = await service.fetchSessionSummary(session.id)
+    expect(summary.data?.last_used_at).toBe('2026-04-09T08:00:00.000Z')
+    expect(summary.data?.latest_model_label).toBe('codex/gpt-5.4')
+  })
+
+  it('retries sessions stuck in error state on the next dashboard fetch', async () => {
+    const project = db.createProject({ name: 'Retry Project', path: '/tmp/retry-project' })
+    const worktree = db.createWorktree({
+      project_id: project.id,
+      path: '/tmp/retry-project',
+      name: 'main',
+      branch_name: 'main',
+      is_default: true
+    })
+    const session = db.createSession({
+      worktree_id: worktree.id,
+      project_id: project.id,
+      name: 'Retry claude session',
+      opencode_session_id: 'claude-retry',
+      agent_sdk: 'claude-code',
+      model_provider_id: 'claude-code',
+      model_id: 'sonnet'
+    })
+
+    // First fetch: transcript reader throws → session marked 'partial' (error path).
+    mockReadClaudeTranscriptUsage.mockRejectedValueOnce(new Error('transient io error'))
+    const first = await service.fetchDashboard({ range: 'all', engine: 'all' })
+    expect(first.success).toBe(true)
+    expect(first.data?.total_cost).toBe(0)
+    expect(db.getUsageEntriesBySession(session.id)).toHaveLength(0)
+
+    // Second fetch: transcript reader recovers. Without the retry fix, the
+    // session would be permanently skipped because syncState.status = 'error'
+    // makes getSessionSyncSnapshot report stale=false.
+    mockReadClaudeTranscriptUsage.mockResolvedValueOnce({
+      entries: [
+        {
+          sourceMessageId: 'assistant-1',
+          occurredAt: '2026-04-09T08:00:00.000Z',
+          model: 'claude-sonnet-4-6',
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 120,
+          cost: 0.0125
+        }
+      ],
+      filePath: '/tmp/recovered-transcript.jsonl',
+      mtimeMs: 456
+    })
+
+    const second = await service.fetchDashboard({ range: 'all', engine: 'all' })
+    expect(second.success).toBe(true)
+    expect(second.data?.total_cost).toBeCloseTo(0.0125, 10)
+    expect(db.getUsageEntriesBySession(session.id)).toHaveLength(1)
+  })
 })
 
 if (!canRunDatabaseTests()) {
